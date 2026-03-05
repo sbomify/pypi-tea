@@ -38,6 +38,26 @@ app.include_router(component_releases.router)
 app.include_router(artifacts.router)
 app.include_router(stats.router)
 
+# TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
+# after probing /.well-known/tea, so mount API routes under the version prefix too.
+_version_prefix = f"/v{settings.tea_spec_version}"
+
+
+@app.head(_version_prefix)
+@app.get(_version_prefix)
+async def version_root() -> dict[str, str]:
+    """Version prefix root — used by TEA clients to probe endpoint reachability."""
+    return {"version": settings.tea_spec_version}
+
+
+app.include_router(discovery.router, prefix=_version_prefix)
+app.include_router(products.router, prefix=_version_prefix)
+app.include_router(product_releases.router, prefix=_version_prefix)
+app.include_router(components.router, prefix=_version_prefix)
+app.include_router(component_releases.router, prefix=_version_prefix)
+app.include_router(artifacts.router, prefix=_version_prefix)
+app.include_router(stats.router, prefix=_version_prefix)
+
 # Cache headers for Cloudflare: TEA data is derived from immutable wheels
 # and cached in Redis, so responses can be cached at the edge.
 _CACHE_RULES: dict[str, str] = {
@@ -54,6 +74,9 @@ _CACHE_RULES: dict[str, str] = {
 async def add_cache_headers(request: Request, call_next: Any) -> Response:
     response: Response = await call_next(request)
     path = request.url.path
+    # Strip version prefix so cache rules match versioned paths too
+    if path.startswith(_version_prefix):
+        path = path[len(_version_prefix) :]
     for prefix, header in _CACHE_RULES.items():
         if path.startswith(prefix):
             response.headers["Cache-Control"] = header
