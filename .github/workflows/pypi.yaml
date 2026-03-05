@@ -18,6 +18,8 @@ jobs:
       url: https://test.pypi.org/p/pypi-tea
     permissions:
       id-token: write
+      contents: read
+      attestations: write
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -40,6 +42,11 @@ jobs:
           AUGMENT: "true"
           ENRICH: "true"
           UPLOAD: "true"
+
+      - name: Attest SBOM
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        with:
+          subject-path: '${{ github.workspace }}/pypi-tea.cdx.json'
 
       - name: Determine version
         id: version
@@ -76,6 +83,8 @@ jobs:
       url: https://pypi.org/p/pypi-tea
     permissions:
       id-token: write
+      contents: read
+      attestations: write
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -97,6 +106,11 @@ jobs:
           AUGMENT: "true"
           ENRICH: "true"
           UPLOAD: "true"
+
+      - name: Attest SBOM
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        with:
+          subject-path: '${{ github.workspace }}/pypi-tea.cdx.json'
 
       - name: Build wheel
         run: uv build
