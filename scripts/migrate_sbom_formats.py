@@ -96,8 +96,23 @@ async def main() -> None:
         await r.hdel(STATS_KEY, *stale_keys)
 
     # Step 3: Rebuild from cached SBOM content
+    # Use both the tracking set AND a scan of sbom:* keys to catch any
+    # wheels that were cached but not added to the set.
     wheel_urls: set[str] = await r.smembers(WHEELS_WITH_SBOM_KEY)  # type: ignore[assignment]
-    print(f"Rebuilding formats from {len(wheel_urls)} cached wheels...")
+    print(f"Wheels in tracking set: {len(wheel_urls)}")
+
+    # Also scan for sbom:* keys directly
+    scan_count = 0
+    async for key in r.scan_iter(match="sbom:*", count=500):
+        wheel_url = key.removeprefix("sbom:")
+        if wheel_url not in wheel_urls:
+            wheel_urls.add(wheel_url)
+            # Fix the tracking set while we're at it
+            await r.sadd(WHEELS_WITH_SBOM_KEY, wheel_url)  # type: ignore[misc]
+            scan_count += 1
+    if scan_count:
+        print(f"Found {scan_count} additional wheels from sbom:* keys (added to tracking set)")
+    print(f"Rebuilding formats from {len(wheel_urls)} total cached wheels...")
 
     format_counts: dict[str, int] = {}
     tracked = 0
