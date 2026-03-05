@@ -27,6 +27,20 @@ jobs:
       - name: Install UV
         uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
 
+      - name: Generate SBOM (PEP 770)
+        uses: sbomify/sbomify-action@master
+        env:
+          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
+          API_BASE_URL: 'https://stage.sbomify.com'
+          COMPONENT_ID: 'GqOHskUyBcUR'
+          COMPONENT_NAME: 'pypi-tea'
+          LOCK_FILE: uv.lock
+          SBOM_FORMAT: cyclonedx
+          OUTPUT_FILE: pypi-tea.cdx.json
+          AUGMENT: "true"
+          ENRICH: "true"
+          UPLOAD: "false"
+
       - name: Determine version
         id: version
         env:
@@ -70,6 +84,19 @@ jobs:
 
       - name: Install UV
         uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+
+      - name: Generate SBOM (PEP 770)
+        uses: sbomify/sbomify-action@master
+        env:
+          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          COMPONENT_ID: 'e0O7yCDijhp7'
+          COMPONENT_NAME: 'pypi-tea'
+          LOCK_FILE: uv.lock
+          SBOM_FORMAT: cyclonedx
+          OUTPUT_FILE: pypi-tea.cdx.json
+          AUGMENT: "true"
+          ENRICH: "true"
+          UPLOAD: "false"
 
       - name: Build wheel
         run: uv build

@@ -16,11 +16,15 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.28.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pypi_tea"]
+sbom-files = ["pypi-tea.cdx.json"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/pypi_tea", "pypi-tea.cdx.json", "pyproject.toml", "README.md", "LICENSE"]
 
 [dependency-groups]
 dev = [
