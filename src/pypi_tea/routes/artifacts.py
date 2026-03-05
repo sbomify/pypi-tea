@@ -9,7 +9,7 @@ from pypi_tea.cache import Cache
 from pypi_tea.deps import get_cache, get_http_client
 from pypi_tea.services.mapper import _build_artifact
 from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
-from pypi_tea.services.sbom_extractor import _guess_media_type, extract_sboms
+from pypi_tea.services.sbom_extractor import extract_sboms
 
 router = APIRouter()
 
@@ -43,7 +43,16 @@ async def get_artifact(
     if not matching_wheel:
         matching_wheel = WheelInfo(filename=sbom_path.split("/")[0], url=wheel_url, digests={}, size=None)
 
-    sbom = {"path": sbom_path, "content": "", "media_type": _guess_media_type(sbom_path)}
+    # Try to get the real media_type from cached SBOM content
+    media_type = "application/octet-stream"
+    cached_sboms = await cache.get_sbom_content(wheel_url)
+    if cached_sboms:
+        for s in cached_sboms:
+            if s["path"] == sbom_path:
+                media_type = s.get("media_type", media_type)
+                break
+
+    sbom = {"path": sbom_path, "content": "", "media_type": media_type}
     artifact = _build_artifact(matching_wheel, sbom)
     return artifact.model_dump(by_alias=True)
 
@@ -65,7 +74,7 @@ async def download_artifact(
     if cached_sboms:
         for sbom in cached_sboms:
             if sbom["path"] == sbom_path:
-                media_type = sbom.get("media_type", _guess_media_type(sbom_path))
+                media_type = sbom.get("media_type", "application/octet-stream")
                 return Response(content=sbom["content"], media_type=media_type)
 
     # Cache miss — re-extract from wheel

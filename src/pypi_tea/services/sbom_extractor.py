@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import requests
 from remotezip import RemoteIOError, RemoteZip
 
+from pypi_tea.services.sbom_format import detect_sbom_format
+
 logger = logging.getLogger("pypi_tea.sbom_extractor")
 
 USER_AGENT = "pypi-tea/0.1.0 (https://github.com/sbomify/pypi-tea)"
@@ -19,24 +21,6 @@ MAX_FULL_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 # Limit concurrent extractions to avoid memory pressure from multiple
 # large wheels being processed simultaneously.
 _extraction_semaphore = asyncio.Semaphore(3)
-
-SBOM_MEDIA_TYPES = {
-    ".cdx.json": "application/vnd.cyclonedx+json",
-    ".cdx.xml": "application/vnd.cyclonedx+xml",
-    ".spdx.json": "application/spdx+json",
-    ".spdx.rdf": "application/spdx+rdf",
-    ".json": "application/json",
-    ".xml": "application/xml",
-    ".spdx": "text/spdx",
-}
-
-
-def _guess_media_type(path: str) -> str:
-    lower = path.lower()
-    for suffix, mt in SBOM_MEDIA_TYPES.items():
-        if lower.endswith(suffix):
-            return mt
-    return "application/octet-stream"
 
 
 @dataclass
@@ -52,14 +36,14 @@ def _extract_from_zipfile(zf: zipfile.ZipFile) -> list[SBOMFile]:
         return []
     sboms = []
     for entry in sbom_entries:
-        content = zf.read(entry)
-        sboms.append(
-            SBOMFile(
-                path=entry,
-                content=content.decode("utf-8", errors="replace"),
-                media_type=_guess_media_type(entry),
-            )
-        )
+        content = zf.read(entry).decode("utf-8", errors="replace")
+        _fmt, media_type = detect_sbom_format(content)
+        if media_type is None:
+            media_type = "application/octet-stream"
+        if _fmt is None:
+            logger.warning("Could not detect SBOM format for %s, skipping", entry)
+            continue
+        sboms.append(SBOMFile(path=entry, content=content, media_type=media_type))
     return sboms
 
 

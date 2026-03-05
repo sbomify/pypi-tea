@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""One-off migration: convert SBOM format tracking from set to hash map.
-
-The old code used a Redis set for dedup + stat counters.
-The new code uses a hash map (sbom_id → format) which is self-correcting.
+"""One-off migration: rebuild SBOM format, validation, and encoding stats.
 
 This script:
-1. Deletes the old set (if present)
-2. Clears stale sbom_format:* counters from the stats hash
-3. Rebuilds format counts by re-detecting formats from cached SBOM content
+1. Deletes old tracking hashes (if present)
+2. Clears stale counters from the stats hash
+3. Rebuilds all counts by re-detecting and validating from cached SBOM content
 
-Run once after deploying v0.1.6+:
+Run once after deploying:
     uv run python scripts/migrate_sbom_formats.py
 
 Requires PYPI_TEA_REDIS_URL env var (defaults to redis://localhost:6379).
@@ -18,86 +15,49 @@ Requires PYPI_TEA_REDIS_URL env var (defaults to redis://localhost:6379).
 import asyncio
 import json
 import os
+import sys
 
 import redis.asyncio as redis
+
+# Allow importing from the src directory
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from pypi_tea.services.sbom_format import detect_sbom_format, validate_sbom  # noqa: E402
 
 
 REDIS_URL = os.environ.get("PYPI_TEA_REDIS_URL", "redis://localhost:6379")
 STATS_KEY = "stats"
 FORMATS_KEY = "unique:sbom_formats_tracked"
+VALIDATION_KEY = "unique:sbom_validation"
+ENCODINGS_KEY = "unique:sbom_encodings"
 WHEELS_WITH_SBOM_KEY = "unique:wheels_with_sbom"
-
-SBOM_MEDIA_TYPES = {
-    ".cdx.json": "application/vnd.cyclonedx+json",
-    ".cdx.xml": "application/vnd.cyclonedx+xml",
-    ".spdx.json": "application/spdx+json",
-    ".spdx.rdf": "application/spdx+rdf",
-    ".json": "application/json",
-    ".xml": "application/xml",
-    ".spdx": "text/spdx",
-}
-
-
-def guess_media_type(path: str) -> str:
-    lower = path.lower()
-    for suffix, mt in SBOM_MEDIA_TYPES.items():
-        if lower.endswith(suffix):
-            return mt
-    return "application/octet-stream"
-
-
-def detect_format(content: str, media_type: str) -> str | None:
-    if "cyclonedx" in media_type:
-        try:
-            data = json.loads(content)
-            return f"CycloneDX/{data.get('specVersion', 'unknown')}"
-        except Exception:
-            return "CycloneDX/unknown"
-    if "spdx" in media_type:
-        try:
-            data = json.loads(content)
-            version = data.get("spdxVersion", "").removeprefix("SPDX-") or "unknown"
-            return f"SPDX/{version}"
-        except Exception:
-            return "SPDX/unknown"
-    if media_type == "application/json":
-        try:
-            data = json.loads(content)
-            if data.get("bomFormat") == "CycloneDX":
-                return f"CycloneDX/{data.get('specVersion', 'unknown')}"
-            if "spdxVersion" in data:
-                return f"SPDX/{data['spdxVersion'].removeprefix('SPDX-')}"
-        except Exception:
-            pass
-    return None
 
 
 async def main() -> None:
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
-    # Step 1: Delete old set if present
-    key_type = await r.type(FORMATS_KEY)
-    if key_type == "set":
-        count = await r.scard(FORMATS_KEY)
-        print(f"Deleting old set-based format tracker ({count} entries)...")
-        await r.delete(FORMATS_KEY)
-    elif key_type == "hash":
-        old_count = await r.hlen(FORMATS_KEY)
-        print(f"Format tracker is already a hash ({old_count} entries). Clearing for rebuild...")
-        await r.delete(FORMATS_KEY)
-    else:
-        print("No existing format tracker found.")
+    # Step 1: Clear old tracking hashes
+    for key_name, label in [
+        (FORMATS_KEY, "format"),
+        (VALIDATION_KEY, "validation"),
+        (ENCODINGS_KEY, "encoding"),
+    ]:
+        key_type = await r.type(key_name)
+        if key_type in ("set", "hash"):
+            count = await r.hlen(key_name) if key_type == "hash" else await r.scard(key_name)
+            print(f"Clearing {label} tracker ({count} entries)...")
+            await r.delete(key_name)
+        else:
+            print(f"No existing {label} tracker found.")
 
-    # Step 2: Clear stale format counters
+    # Step 2: Clear stale counters
     raw = await r.hgetall(STATS_KEY)
-    stale_keys = [k for k in raw if k.startswith("sbom_format:")]
+    stale_keys = [k for k in raw if k.startswith(("sbom_format:", "sbom_validation:", "sbom_encoding:"))]
     if stale_keys:
-        print(f"Clearing {len(stale_keys)} stale format counters: {stale_keys}")
+        print(f"Clearing {len(stale_keys)} stale counters")
         await r.hdel(STATS_KEY, *stale_keys)
 
     # Step 3: Rebuild from cached SBOM content
-    # Use both the tracking set AND a scan of sbom:* keys to catch any
-    # wheels that were cached but not added to the set.
     wheel_urls: set[str] = await r.smembers(WHEELS_WITH_SBOM_KEY)  # type: ignore[assignment]
     print(f"Wheels in tracking set: {len(wheel_urls)}")
 
@@ -107,14 +67,16 @@ async def main() -> None:
         wheel_url = key.removeprefix("sbom:")
         if wheel_url not in wheel_urls:
             wheel_urls.add(wheel_url)
-            # Fix the tracking set while we're at it
             await r.sadd(WHEELS_WITH_SBOM_KEY, wheel_url)  # type: ignore[misc]
             scan_count += 1
     if scan_count:
         print(f"Found {scan_count} additional wheels from sbom:* keys (added to tracking set)")
-    print(f"Rebuilding formats from {len(wheel_urls)} total cached wheels...")
+    print(f"Rebuilding from {len(wheel_urls)} total cached wheels...")
 
     format_counts: dict[str, int] = {}
+    encoding_counts: dict[str, int] = {}
+    valid_count = 0
+    invalid_count = 0
     tracked = 0
     missing = 0
 
@@ -127,23 +89,45 @@ async def main() -> None:
         sboms = json.loads(cached)
         for sbom in sboms:
             sbom_id = f"{wheel_url}:{sbom['path']}"
-            media_type = sbom.get("media_type", guess_media_type(sbom["path"]))
-            fmt = detect_format(sbom["content"], media_type)
+            content = sbom["content"]
+            media_type = sbom.get("media_type", "application/octet-stream")
+            fmt, detected_mt = detect_sbom_format(content)
+            if detected_mt:
+                media_type = detected_mt
             if fmt:
                 await r.hset(FORMATS_KEY, sbom_id, fmt)  # type: ignore[misc]
+                await r.hset(ENCODINGS_KEY, sbom_id, media_type)  # type: ignore[misc]
                 format_counts[fmt] = format_counts.get(fmt, 0) + 1
+                encoding_counts[media_type] = encoding_counts.get(media_type, 0) + 1
+
+                valid = validate_sbom(content, fmt, media_type)
+                result = "valid" if valid else "invalid"
+                await r.hset(VALIDATION_KEY, sbom_id, result)  # type: ignore[misc]
+                if valid:
+                    valid_count += 1
+                else:
+                    invalid_count += 1
+
                 tracked += 1
 
     # Step 4: Write rebuilt counters to stats
     pipe = r.pipeline()
     for fmt, count in format_counts.items():
         pipe.hset(STATS_KEY, f"sbom_format:{fmt}", count)
+    for mt, count in encoding_counts.items():
+        pipe.hset(STATS_KEY, f"sbom_encoding:{mt}", count)
+    pipe.hset(STATS_KEY, "sbom_validation:valid", valid_count)
+    pipe.hset(STATS_KEY, "sbom_validation:invalid", invalid_count)
     await pipe.execute()
 
     print(f"\nDone! Tracked {tracked} SBOMs ({missing} wheels had expired cache).")
-    print("Format counts:")
+    print("\nFormat counts:")
     for fmt, count in sorted(format_counts.items()):
         print(f"  {fmt}: {count}")
+    print(f"\nValidation: {valid_count} valid, {invalid_count} invalid")
+    print("\nEncoding counts:")
+    for mt, count in sorted(encoding_counts.items()):
+        print(f"  {mt}: {count}")
 
     await r.aclose()
 

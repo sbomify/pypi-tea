@@ -19,6 +19,8 @@ UNIQUE_PACKAGES_WITH_SBOM = "unique:packages_with_sbom"
 UNIQUE_WHEELS_WITH_SBOM = "unique:wheels_with_sbom"
 UNIQUE_WHEELS_WITHOUT_SBOM = "unique:wheels_without_sbom"
 UNIQUE_SBOM_FORMATS_TRACKED = "unique:sbom_formats_tracked"
+UNIQUE_SBOM_VALIDATION = "unique:sbom_validation"
+UNIQUE_SBOM_ENCODINGS = "unique:sbom_encodings"
 
 # Daily set prefixes for time series (with TTL)
 DAILY_PACKAGES_PREFIX = "daily:packages:"
@@ -116,6 +118,31 @@ class Cache:
         pipe.hincrby(STATS_KEY, f"sbom_format:{format_key}", 1)
         await pipe.execute()
 
+    async def track_sbom_validation(self, sbom_id: str, valid: bool) -> None:
+        """Track SBOM validation result. Same idempotent pattern as track_sbom_format."""
+        result = "valid" if valid else "invalid"
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_VALIDATION, sbom_id)  # type: ignore[misc]
+        if previous == result:
+            return
+        pipe = self._client.pipeline()
+        pipe.hset(UNIQUE_SBOM_VALIDATION, sbom_id, result)
+        if previous:
+            pipe.hincrby(STATS_KEY, f"sbom_validation:{previous}", -1)
+        pipe.hincrby(STATS_KEY, f"sbom_validation:{result}", 1)
+        await pipe.execute()
+
+    async def track_sbom_encoding(self, sbom_id: str, media_type: str) -> None:
+        """Track SBOM encoding (media type). Same idempotent pattern."""
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_ENCODINGS, sbom_id)  # type: ignore[misc]
+        if previous == media_type:
+            return
+        pipe = self._client.pipeline()
+        pipe.hset(UNIQUE_SBOM_ENCODINGS, sbom_id, media_type)
+        if previous:
+            pipe.hincrby(STATS_KEY, f"sbom_encoding:{previous}", -1)
+        pipe.hincrby(STATS_KEY, f"sbom_encoding:{media_type}", 1)
+        await pipe.execute()
+
     # --- Package-level tracking ---
 
     async def track_package_query(self, package: str, version: str, has_sbom: bool) -> None:
@@ -192,6 +219,14 @@ class Cache:
     def _extract_sbom_formats(counters: dict[str, int]) -> dict[str, int]:
         return {k.removeprefix("sbom_format:"): v for k, v in counters.items() if k.startswith("sbom_format:")}
 
+    @staticmethod
+    def _extract_sbom_validation(counters: dict[str, int]) -> dict[str, int]:
+        return {k.removeprefix("sbom_validation:"): v for k, v in counters.items() if k.startswith("sbom_validation:")}
+
+    @staticmethod
+    def _extract_sbom_encodings(counters: dict[str, int]) -> dict[str, int]:
+        return {k.removeprefix("sbom_encoding:"): v for k, v in counters.items() if k.startswith("sbom_encoding:")}
+
     async def get_stats(self) -> dict[str, Any]:
         raw = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
         counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
@@ -219,6 +254,8 @@ class Cache:
                 "sbom_percentage": round(wheels_with / wheels_total * 100, 2) if wheels_total else None,
             },
             "sbom_formats": self._extract_sbom_formats(counters),
+            "sbom_validation": self._extract_sbom_validation(counters),
+            "sbom_encodings": self._extract_sbom_encodings(counters),
         }
 
     async def get_stats_timeseries(self) -> list[dict[str, Any]]:

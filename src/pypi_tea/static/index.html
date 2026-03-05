@@ -43,7 +43,7 @@
         </div>
       </div>
 
-      <!-- Charts row 1 -->
+      <!-- Charts row 1: Coverage + Formats -->
       <div class="grid md:grid-cols-2 gap-6 mb-6">
         <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <h2 class="text-sm font-medium text-gray-400 mb-4">Package SBOM Coverage</h2>
@@ -51,8 +51,28 @@
         </div>
         <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
           <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Formats</h2>
+          <p class="text-xs text-gray-600 mb-3">Detected by parsing file content (not file extensions)</p>
           <div id="sbom-formats-empty" class="hidden flex items-center justify-center h-[260px] text-gray-600">No format data yet</div>
           <canvas id="formats-chart" height="260"></canvas>
+        </div>
+      </div>
+
+      <!-- Charts row 2: Validation + Encoding -->
+      <div class="grid md:grid-cols-2 gap-6 mb-6">
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Validation</h2>
+          <p class="text-xs text-gray-600 mb-3">Schema validation against CycloneDX / SPDX specs</p>
+          <div id="validation-empty" class="hidden flex items-center justify-center h-[260px] text-gray-600">No validation data yet</div>
+          <canvas id="validation-chart" height="260"></canvas>
+          <div id="validation-summary" class="hidden mt-3 text-center">
+            <span id="validation-pct" class="text-sm font-medium"></span>
+          </div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Encoding</h2>
+          <p class="text-xs text-gray-600 mb-3">File format breakdown (JSON, XML, tag-value)</p>
+          <div id="encoding-empty" class="hidden flex items-center justify-center h-[260px] text-gray-600">No encoding data yet</div>
+          <canvas id="encoding-chart" height="260"></canvas>
         </div>
       </div>
 
@@ -108,6 +128,8 @@
   <script>
     let coverageChart = null;
     let formatsChart = null;
+    let validationChart = null;
+    let encodingChart = null;
     let packagesTimeChart = null;
     let sbomTimeChart = null;
 
@@ -150,6 +172,24 @@
       if (name.startsWith('SPDX')) return SPDX_PALETTE[indexInFamily % SPDX_PALETTE.length];
       return OTHER_PALETTE[indexInFamily % OTHER_PALETTE.length];
     }
+
+    // Map media types to human-readable encoding names
+    const ENCODING_LABELS = {
+      'application/vnd.cyclonedx+json': 'CycloneDX JSON',
+      'application/vnd.cyclonedx+xml': 'CycloneDX XML',
+      'application/spdx+json': 'SPDX JSON',
+      'application/spdx+rdf': 'SPDX RDF/XML',
+      'text/spdx': 'SPDX Tag-Value',
+      'application/octet-stream': 'Unknown',
+    };
+    const ENCODING_COLORS = {
+      'CycloneDX JSON': 'rgb(59, 130, 246)',
+      'CycloneDX XML': 'rgb(6, 182, 212)',
+      'SPDX JSON': 'rgb(168, 85, 247)',
+      'SPDX RDF/XML': 'rgb(139, 92, 246)',
+      'SPDX Tag-Value': 'rgb(99, 102, 241)',
+      'Unknown': COLORS.gray,
+    };
 
     const CHART_GRID = { color: '#1f2937' };
     const CHART_TICKS = { color: '#6b7280' };
@@ -211,8 +251,17 @@
         },
       });
 
-      // SBOM formats
-      const formats = data.sbom_formats || {};
+      // SBOM formats doughnut
+      renderFormatsChart(data.sbom_formats || {});
+
+      // SBOM validation doughnut
+      renderValidationChart(data.sbom_validation || {});
+
+      // SBOM encoding doughnut
+      renderEncodingChart(data.sbom_encodings || {});
+    }
+
+    function renderFormatsChart(formats) {
       const formatEntries = Object.entries(formats).sort((a, b) => b[1] - a[1]);
       const formatsCanvas = document.getElementById('formats-chart');
       const formatsEmpty = document.getElementById('sbom-formats-empty');
@@ -222,7 +271,6 @@
         formatsCanvas.classList.remove('hidden');
         const fmtCtx = formatsCanvas.getContext('2d');
         if (formatsChart) formatsChart.destroy();
-        // Assign colors by family so each CycloneDX/SPDX version gets a distinct shade
         const familyCounts = {};
         const fmtColors = formatEntries.map(([name]) => {
           const family = name.split('/')[0];
@@ -250,6 +298,94 @@
       } else {
         formatsCanvas.classList.add('hidden');
         formatsEmpty.classList.remove('hidden');
+      }
+    }
+
+    function renderValidationChart(validation) {
+      const valid = validation.valid || 0;
+      const invalid = validation.invalid || 0;
+      const total = valid + invalid;
+      const canvas = document.getElementById('validation-chart');
+      const empty = document.getElementById('validation-empty');
+      const summary = document.getElementById('validation-summary');
+
+      if (total > 0) {
+        empty.classList.add('hidden');
+        canvas.classList.remove('hidden');
+        summary.classList.remove('hidden');
+        const ctx = canvas.getContext('2d');
+        if (validationChart) validationChart.destroy();
+        validationChart = new Chart(ctx, {
+          type: 'doughnut',
+          data: {
+            labels: ['Valid', 'Invalid'],
+            datasets: [{
+              data: [valid, invalid],
+              backgroundColor: [COLORS.green, COLORS.red],
+              borderWidth: 0,
+            }],
+          },
+          options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: {
+              legend: { labels: { color: '#9ca3af' } },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const pct = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
+                    return `${ctx.label}: ${ctx.raw.toLocaleString()} (${pct}%)`;
+                  },
+                },
+              },
+            },
+          },
+        });
+        const validPct = (valid / total * 100).toFixed(1);
+        const pctEl = document.getElementById('validation-pct');
+        if (invalid > 0) {
+          pctEl.innerHTML = `<span class="text-green-400">${valid.toLocaleString()}</span> valid, <span class="text-red-400">${invalid.toLocaleString()}</span> invalid (${validPct}% pass rate)`;
+        } else {
+          pctEl.innerHTML = `<span class="text-green-400">${valid.toLocaleString()}</span> SBOMs — all valid`;
+        }
+      } else {
+        canvas.classList.add('hidden');
+        empty.classList.remove('hidden');
+        summary.classList.add('hidden');
+      }
+    }
+
+    function renderEncodingChart(encodings) {
+      const entries = Object.entries(encodings).sort((a, b) => b[1] - a[1]);
+      const canvas = document.getElementById('encoding-chart');
+      const empty = document.getElementById('encoding-empty');
+
+      if (entries.length > 0) {
+        empty.classList.add('hidden');
+        canvas.classList.remove('hidden');
+        const ctx = canvas.getContext('2d');
+        if (encodingChart) encodingChart.destroy();
+        const labels = entries.map(([mt]) => ENCODING_LABELS[mt] || mt);
+        const colors = labels.map(l => ENCODING_COLORS[l] || COLORS.gray);
+        encodingChart = new Chart(ctx, {
+          type: 'doughnut',
+          data: {
+            labels,
+            datasets: [{
+              data: entries.map(([, count]) => count),
+              backgroundColor: colors,
+              borderWidth: 0,
+            }],
+          },
+          options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+          },
+        });
+      } else {
+        canvas.classList.add('hidden');
+        empty.classList.remove('hidden');
       }
     }
 

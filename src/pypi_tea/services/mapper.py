@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -32,6 +31,7 @@ from pypi_tea.cache import Cache
 from pypi_tea.config import settings
 from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
 from pypi_tea.services.sbom_extractor import extract_sboms
+from pypi_tea.services.sbom_format import detect_sbom_format, validate_sbom
 from pypi_tea.services.uuids import (
     artifact_uuid,
     component_release_uuid,
@@ -75,41 +75,18 @@ async def _get_metadata_cached(client: httpx.AsyncClient, cache: Cache, package:
     return metadata
 
 
-def _detect_sbom_format(content: str, media_type: str) -> str | None:
-    """Detect SBOM format and version, returning e.g. 'CycloneDX/1.6' or 'SPDX/2.3'."""
-    if "cyclonedx" in media_type:
-        try:
-            data = json.loads(content)
-            version = data.get("specVersion", "unknown")
-            return f"CycloneDX/{version}"
-        except Exception:
-            return "CycloneDX/unknown"
-    if "spdx" in media_type:
-        try:
-            data = json.loads(content)
-            version = data.get("spdxVersion", "").removeprefix("SPDX-") or "unknown"
-            return f"SPDX/{version}"
-        except Exception:
-            return "SPDX/unknown"
-    # Try to detect from content for generic JSON
-    if media_type == "application/json":
-        try:
-            data = json.loads(content)
-            if "bomFormat" in data and data.get("bomFormat") == "CycloneDX":
-                return f"CycloneDX/{data.get('specVersion', 'unknown')}"
-            if "spdxVersion" in data:
-                return f"SPDX/{data['spdxVersion'].removeprefix('SPDX-')}"
-        except Exception:
-            pass
-    return None
-
-
 async def _track_sbom_formats(cache: Cache, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
-    """Track SBOM formats, deduplicated by wheel_url:path."""
+    """Track SBOM formats, validation, and encoding, deduplicated by wheel_url:path."""
     for sbom in sboms:
-        fmt = _detect_sbom_format(sbom["content"], sbom["media_type"])
+        content = sbom["content"]
+        media_type = sbom["media_type"]
+        fmt, _mt = detect_sbom_format(content)
         if fmt:
-            await cache.track_sbom_format(f"{wheel_url}:{sbom['path']}", fmt)
+            sbom_id = f"{wheel_url}:{sbom['path']}"
+            await cache.track_sbom_format(sbom_id, fmt)
+            await cache.track_sbom_encoding(sbom_id, media_type)
+            valid = validate_sbom(content, fmt, media_type)
+            await cache.track_sbom_validation(sbom_id, valid)
 
 
 async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str, Any]]:
