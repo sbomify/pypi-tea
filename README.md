@@ -198,4 +198,4 @@ The test suite runs [libtea's conformance checks](https://pypi.org/project/libte
 
 ## License
 
-MIT
+Apache-2.0
