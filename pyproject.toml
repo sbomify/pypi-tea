@@ -1,6 +1,6 @@
 [project]
 name = "pypi-tea"
-version = "0.1.0"
+version = "0.1.1"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 requires-python = ">=3.14"
