@@ -1,6 +1,6 @@
 [project]
 name = "pypi-tea"
-version = "0.1.4"
+version = "0.1.5"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 license = "Apache-2.0"
