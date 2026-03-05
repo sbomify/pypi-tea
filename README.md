@@ -1,8 +1,8 @@
 # pypi-tea
 
-[![CI](https://github.com/sbomify/pypi-tea/actions/workflows/pypi.yaml/badge.svg)](https://github.com/sbomify/pypi-tea/actions/workflows/pypi.yaml)
+[![CI](https://github.com/sbomify/pypi-tea/actions/workflows/ci.yaml/badge.svg)](https://github.com/sbomify/pypi-tea/actions/workflows/ci.yaml)
 [![PyPI version](https://img.shields.io/pypi/v/pypi-tea.svg)](https://pypi.org/project/pypi-tea/)
-[![Python](https://img.shields.io/pypi/pyversions/pypi-tea.svg)](https://pypi.org/project/pypi-tea/)
+[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://pypi.org/project/pypi-tea/)
 [![License](https://img.shields.io/github/license/sbomify/pypi-tea.svg)](https://github.com/sbomify/pypi-tea/blob/master/LICENSE)
 [![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://trust.sbomify.com/component/pypi-tea/)
 
