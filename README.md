@@ -142,6 +142,36 @@ curl "http://localhost:8000/products?idType=PURL&idValue=pkg:pypi/cyclonedx-pyth
 
 All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable across requests and server restarts.
 
+## Deployment
+
+A systemd service file and setup script are included in `deploy/`.
+
+```bash
+# As root:
+sudo ./deploy/setup.sh
+sudo systemctl start pypi-tea
+```
+
+This installs the project to `/opt/pypi-tea` (read-only) and runs as the `nobody` user. uv's cache and virtualenv are stored under `/tmp/pypi-tea` since `nobody` has no home directory and no write access to `/opt`.
+
+To override configuration:
+
+```bash
+sudo systemctl edit pypi-tea
+```
+
+```ini
+[Service]
+Environment=PYPI_TEA_REDIS_URL=redis://my-redis:6379/1
+Environment=PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
+```
+
+Logs:
+
+```bash
+journalctl -u pypi-tea -f
+```
+
 ## Development
 
 ```bash

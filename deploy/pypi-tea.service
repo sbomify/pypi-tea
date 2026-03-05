@@ -1,0 +1,42 @@
+[Unit]
+Description=pypi-tea - TEA Server for PyPI Package SBOMs
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=exec
+User=nobody
+Group=nogroup
+
+# App lives in /opt/pypi-tea, but nobody can't write there
+WorkingDirectory=/opt/pypi-tea
+
+# uv needs writable dirs for cache and venv management
+Environment=UV_CACHE_DIR=/tmp/pypi-tea/uv-cache
+Environment=UV_PROJECT_ENVIRONMENT=/tmp/pypi-tea/venv
+Environment=HOME=/tmp/pypi-tea
+
+# App configuration
+Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
+Environment=PYPI_TEA_SERVER_ROOT_URL=http://localhost:8000
+
+ExecStartPre=/usr/local/bin/uv sync --locked
+ExecStart=/usr/local/bin/uv run uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
+
+Restart=on-failure
+RestartSec=5
+
+# Create /tmp/pypi-tea owned by nobody before starting
+RuntimeDirectory=pypi-tea
+RuntimeDirectoryPreserve=yes
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/pypi-tea
+ReadWritePaths=/tmp/pypi-tea
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
