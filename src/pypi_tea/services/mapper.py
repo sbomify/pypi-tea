@@ -136,6 +136,7 @@ def _build_product(name: str, version: str | None) -> Product:
 def _build_artifact(wheel: WheelInfo, sbom: dict[str, Any]) -> Artifact:
     a_uuid = artifact_uuid(wheel.url, sbom["path"])
     sbom_filename = sbom["path"].split("/")[-1]
+    artifact_url = f"{settings.server_root_url}/v{settings.tea_spec_version}/artifact/{a_uuid}/download"
     return Artifact(
         uuid=a_uuid,
         name=sbom_filename,
@@ -143,7 +144,7 @@ def _build_artifact(wheel: WheelInfo, sbom: dict[str, Any]) -> Artifact:
         formats=(
             ArtifactFormat(
                 media_type=sbom["media_type"],
-                url=wheel.url,
+                url=artifact_url,
             ),
         ),
     )
