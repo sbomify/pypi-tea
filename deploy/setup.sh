@@ -25,7 +25,7 @@ cp "${REPO_DIR}/uv.lock" "${INSTALL_DIR}/"
 # Build the venv as root so nobody never needs write access
 echo "==> Building virtualenv"
 cd "${INSTALL_DIR}"
-uv sync --locked
+uv sync --locked --no-editable
 
 # Lock everything down — nobody gets read+execute only
 chown -R root:nogroup "${INSTALL_DIR}"
