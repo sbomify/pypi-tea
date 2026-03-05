@@ -5,8 +5,8 @@ Wants=redis.service
 
 [Service]
 Type=exec
-User=nobody
-Group=nogroup
+User=pypi-tea
+Group=pypi-tea
 
 # App configuration
 Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0

@@ -11,9 +11,15 @@ if ! command -v uv &>/dev/null; then
     cp ~/.local/bin/uv /usr/local/bin/uv
 fi
 
+# Create dedicated service user (no home dir, no login)
+if ! id pypi-tea &>/dev/null; then
+    echo "==> Creating pypi-tea user"
+    useradd --system --no-create-home --shell /usr/sbin/nologin pypi-tea
+fi
+
 # Create writable dir for uvx cache and tool installs
 mkdir -p /tmp/pypi-tea
-chown nobody:nogroup /tmp/pypi-tea
+chown pypi-tea:pypi-tea /tmp/pypi-tea
 
 # Install systemd service
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

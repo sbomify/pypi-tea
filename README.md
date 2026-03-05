@@ -152,7 +152,7 @@ sudo ./deploy/setup.sh
 sudo systemctl start pypi-tea
 ```
 
-This uses `uvx` to run pypi-tea directly from PyPI — no cloning or venv management needed. The service runs as `nobody` with `uvx` handling the tool environment automatically.
+The setup script creates a dedicated `pypi-tea` system user and installs the systemd service. The service uses `uvx` to run pypi-tea directly from PyPI — no cloning or venv management needed.
 
 To override configuration:
 
