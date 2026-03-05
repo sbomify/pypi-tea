@@ -12,7 +12,7 @@
   <div class="max-w-6xl mx-auto px-6 py-10">
     <header class="mb-10">
       <h1 class="text-3xl font-bold tracking-tight">pypi-tea</h1>
-      <p class="text-gray-400 mt-1">TEA Server for PyPI Package SBOMs</p>
+      <p class="text-gray-400 mt-1">SBOM Coverage for PyPI Packages</p>
     </header>
 
     <div id="loading" class="text-gray-500">Loading stats...</div>
@@ -22,62 +22,70 @@
       <!-- Summary cards -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div class="text-xs text-gray-500 uppercase tracking-wide">Total Requests</div>
-          <div id="total-requests" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Packages Explored</div>
+          <div id="packages-explored" class="text-2xl font-semibold mt-1">-</div>
         </div>
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div class="text-xs text-gray-500 uppercase tracking-wide">Overall Hit Ratio</div>
-          <div id="overall-hit-ratio" class="text-2xl font-semibold mt-1">-</div>
-        </div>
-        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div class="text-xs text-gray-500 uppercase tracking-wide">Wheels Checked</div>
-          <div id="wheels-checked" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Packages with SBOMs</div>
+          <div id="packages-with-sbom" class="text-2xl font-semibold mt-1">-</div>
         </div>
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div class="text-xs text-gray-500 uppercase tracking-wide">SBOM Coverage</div>
           <div id="sbom-coverage" class="text-2xl font-semibold mt-1">-</div>
         </div>
-      </div>
-
-      <!-- Current totals -->
-      <div class="grid md:grid-cols-2 gap-6 mb-10">
-        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h2 class="text-sm font-medium text-gray-400 mb-4">Cache Hit / Miss Totals</h2>
-          <canvas id="cache-chart" height="260"></canvas>
-        </div>
-        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Availability</h2>
-          <canvas id="sbom-chart" height="260"></canvas>
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Wheels with SBOMs</div>
+          <div id="wheels-with-sbom" class="text-2xl font-semibold mt-1">-</div>
         </div>
       </div>
 
-      <!-- Time series charts -->
-      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-        <h2 class="text-sm font-medium text-gray-400 mb-4">Cache Requests Over Time <span class="text-gray-600">(24h buckets)</span></h2>
-        <canvas id="requests-time-chart" height="200"></canvas>
-      </div>
-
+      <!-- Charts row 1 -->
       <div class="grid md:grid-cols-2 gap-6 mb-6">
         <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h2 class="text-sm font-medium text-gray-400 mb-4">Hit Ratio Over Time</h2>
-          <canvas id="hitratio-time-chart" height="220"></canvas>
+          <h2 class="text-sm font-medium text-gray-400 mb-4">Package SBOM Coverage</h2>
+          <canvas id="coverage-chart" height="260"></canvas>
         </div>
         <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-          <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Discovery Over Time</h2>
-          <canvas id="sbom-time-chart" height="220"></canvas>
+          <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Formats</h2>
+          <div id="sbom-formats-empty" class="hidden flex items-center justify-center h-[260px] text-gray-600">No format data yet</div>
+          <canvas id="formats-chart" height="260"></canvas>
         </div>
       </div>
 
-      <!-- SBOM formats -->
+      <!-- Time series -->
       <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-        <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Formats</h2>
-        <div id="sbom-formats" class="text-gray-500">No format data yet</div>
+        <h2 class="text-sm font-medium text-gray-400 mb-4">Packages Explored Over Time <span class="text-gray-600">(daily)</span></h2>
+        <canvas id="packages-time-chart" height="200"></canvas>
       </div>
 
-      <!-- Hit ratio bars -->
-      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-10">
-        <h2 class="text-sm font-medium text-gray-400 mb-4">Hit Ratios (All Time)</h2>
-        <div class="space-y-4" id="ratio-bars"></div>
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <h2 class="text-sm font-medium text-gray-400 mb-4">Cumulative SBOM Discovery</h2>
+        <canvas id="sbom-time-chart" height="200"></canvas>
+      </div>
+
+      <!-- Wheel-level detail -->
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <h2 class="text-sm font-medium text-gray-400 mb-4">Wheel-Level Breakdown</h2>
+        <div class="grid grid-cols-3 gap-4 text-center">
+          <div>
+            <div class="text-xs text-gray-500 uppercase tracking-wide">Total Wheels</div>
+            <div id="wheels-total" class="text-lg font-semibold mt-1">-</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 uppercase tracking-wide">With SBOM</div>
+            <div id="wheels-with" class="text-lg font-semibold mt-1 text-green-400">-</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 uppercase tracking-wide">Without SBOM</div>
+            <div id="wheels-without" class="text-lg font-semibold mt-1 text-gray-500">-</div>
+          </div>
+        </div>
+        <div class="mt-4">
+          <div class="w-full bg-gray-800 rounded-full h-2">
+            <div id="wheels-bar" class="bg-green-500 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+          <div class="text-xs text-gray-500 mt-1 text-right"><span id="wheels-pct">-</span> of wheels include an SBOM</div>
+        </div>
       </div>
 
       <div>
@@ -93,25 +101,21 @@
   </div>
 
   <script>
-    let cacheChart = null;
-    let sbomChart = null;
-    let requestsTimeChart = null;
-    let hitratioTimeChart = null;
+    let coverageChart = null;
+    let formatsChart = null;
+    let packagesTimeChart = null;
     let sbomTimeChart = null;
 
     const COLORS = {
       green: 'rgb(34, 197, 94)',
       greenAlpha: 'rgba(34, 197, 94, 0.15)',
       red: 'rgb(239, 68, 68)',
-      redAlpha: 'rgba(239, 68, 68, 0.15)',
       blue: 'rgb(59, 130, 246)',
       blueAlpha: 'rgba(59, 130, 246, 0.15)',
       amber: 'rgb(245, 158, 11)',
       amberAlpha: 'rgba(245, 158, 11, 0.15)',
       purple: 'rgb(168, 85, 247)',
-      purpleAlpha: 'rgba(168, 85, 247, 0.15)',
       gray: 'rgb(107, 114, 128)',
-      grayAlpha: 'rgba(107, 114, 128, 0.15)',
     };
 
     const CHART_GRID = { color: '#1f2937' };
@@ -123,100 +127,89 @@
       grid: CHART_GRID,
     };
 
-    function pct(value, total) {
-      return total > 0 ? ((value / total) * 100).toFixed(1) + '%' : '-';
-    }
-
-    function renderRatioBar(label, hits, misses) {
-      const total = hits + misses;
-      const ratio = total > 0 ? (hits / total) * 100 : 0;
-      const color = ratio >= 70 ? 'bg-green-500' : ratio >= 40 ? 'bg-amber-500' : 'bg-red-500';
-      return `
-        <div>
-          <div class="flex justify-between text-sm mb-1">
-            <span class="text-gray-300">${label}</span>
-            <span class="text-gray-500">${hits} / ${total} (${total > 0 ? ratio.toFixed(1) : 0}%)</span>
-          </div>
-          <div class="w-full bg-gray-800 rounded-full h-2">
-            <div class="${color} h-2 rounded-full transition-all duration-500" style="width: ${ratio}%"></div>
-          </div>
-        </div>
-      `;
-    }
-
     function renderSummary(data) {
-      const c = data.cache;
-      const s = data.sbom_availability;
+      const p = data.packages;
+      const w = data.wheels;
 
-      const totalHits = c.pypi_metadata.hits + c.sbom_content.hits + c.negative_cache.hits;
-      const totalMisses = c.pypi_metadata.misses + c.sbom_content.misses + c.negative_cache.misses;
-      const totalReqs = totalHits + totalMisses;
-      document.getElementById('total-requests').textContent = totalReqs.toLocaleString();
-      document.getElementById('overall-hit-ratio').textContent = pct(totalHits, totalReqs);
-      document.getElementById('wheels-checked').textContent = s.total_wheels_checked.toLocaleString();
+      document.getElementById('packages-explored').textContent = p.total_explored.toLocaleString();
+      document.getElementById('packages-with-sbom').textContent = p.with_sbom.toLocaleString();
       document.getElementById('sbom-coverage').textContent =
-        s.sbom_percentage !== null ? s.sbom_percentage + '%' : '-';
+        p.sbom_percentage !== null ? p.sbom_percentage + '%' : '-';
+      document.getElementById('wheels-with-sbom').textContent = w.with_sbom.toLocaleString();
 
-      document.getElementById('ratio-bars').innerHTML =
-        renderRatioBar('PyPI Metadata', c.pypi_metadata.hits, c.pypi_metadata.misses) +
-        renderRatioBar('SBOM Content', c.sbom_content.hits, c.sbom_content.misses) +
-        renderRatioBar('Negative Cache', c.negative_cache.hits, c.negative_cache.misses);
+      // Wheel breakdown
+      document.getElementById('wheels-total').textContent = w.total_checked.toLocaleString();
+      document.getElementById('wheels-with').textContent = w.with_sbom.toLocaleString();
+      document.getElementById('wheels-without').textContent = w.without_sbom.toLocaleString();
+      const wheelsPct = w.total_checked > 0 ? (w.with_sbom / w.total_checked * 100).toFixed(1) + '%' : '-';
+      document.getElementById('wheels-pct').textContent = wheelsPct;
+      document.getElementById('wheels-bar').style.width = w.total_checked > 0
+        ? (w.with_sbom / w.total_checked * 100) + '%' : '0%';
+
+      // Package coverage doughnut
+      const covCtx = document.getElementById('coverage-chart').getContext('2d');
+      if (coverageChart) coverageChart.destroy();
+      const hasData = p.total_explored > 0;
+      coverageChart = new Chart(covCtx, {
+        type: 'doughnut',
+        data: {
+          labels: ['With SBOM', 'Without SBOM'],
+          datasets: [{
+            data: hasData ? [p.with_sbom, p.without_sbom] : [0, 1],
+            backgroundColor: hasData ? [COLORS.green, COLORS.gray] : ['#1f2937', '#1f2937'],
+            borderWidth: 0,
+          }],
+        },
+        options: {
+          responsive: true,
+          cutout: '65%',
+          plugins: {
+            legend: { labels: { color: '#9ca3af' } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const total = p.total_explored;
+                  const pct = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
+                  return `${ctx.label}: ${ctx.raw.toLocaleString()} (${pct}%)`;
+                },
+              },
+            },
+          },
+        },
+      });
 
       // SBOM formats
       const formats = data.sbom_formats || {};
       const formatEntries = Object.entries(formats).sort((a, b) => b[1] - a[1]);
+      const formatsCanvas = document.getElementById('formats-chart');
+      const formatsEmpty = document.getElementById('sbom-formats-empty');
+
       if (formatEntries.length > 0) {
-        const total = formatEntries.reduce((sum, [, v]) => sum + v, 0);
-        document.getElementById('sbom-formats').innerHTML = formatEntries.map(([name, count]) => {
-          const pctVal = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
-          const isCDX = name.startsWith('CycloneDX');
-          const color = isCDX ? 'bg-blue-500' : 'bg-purple-500';
-          return `
-            <div class="mb-3">
-              <div class="flex justify-between text-sm mb-1">
-                <span class="text-gray-300">${name}</span>
-                <span class="text-gray-500">${count} (${pctVal}%)</span>
-              </div>
-              <div class="w-full bg-gray-800 rounded-full h-2">
-                <div class="${color} h-2 rounded-full transition-all duration-500" style="width: ${pctVal}%"></div>
-              </div>
-            </div>`;
-        }).join('');
+        formatsEmpty.classList.add('hidden');
+        formatsCanvas.classList.remove('hidden');
+        const fmtCtx = formatsCanvas.getContext('2d');
+        if (formatsChart) formatsChart.destroy();
+        const fmtColors = formatEntries.map(([name]) => name.startsWith('CycloneDX') ? COLORS.blue : COLORS.purple);
+        formatsChart = new Chart(fmtCtx, {
+          type: 'doughnut',
+          data: {
+            labels: formatEntries.map(([name]) => name),
+            datasets: [{
+              data: formatEntries.map(([, count]) => count),
+              backgroundColor: fmtColors,
+              borderWidth: 0,
+            }],
+          },
+          options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+          },
+        });
       } else {
-        document.getElementById('sbom-formats').innerHTML = '<span class="text-gray-500">No format data yet</span>';
+        formatsCanvas.classList.add('hidden');
+        formatsEmpty.classList.remove('hidden');
       }
-
-      // Cache bar chart
-      const cacheCtx = document.getElementById('cache-chart').getContext('2d');
-      if (cacheChart) cacheChart.destroy();
-      cacheChart = new Chart(cacheCtx, {
-        type: 'bar',
-        data: {
-          labels: ['PyPI Metadata', 'SBOM Content', 'Negative Cache'],
-          datasets: [
-            { label: 'Hits', data: [c.pypi_metadata.hits, c.sbom_content.hits, c.negative_cache.hits], backgroundColor: COLORS.green, borderRadius: 4 },
-            { label: 'Misses', data: [c.pypi_metadata.misses, c.sbom_content.misses, c.negative_cache.misses], backgroundColor: COLORS.red, borderRadius: 4 },
-          ],
-        },
-        options: {
-          responsive: true,
-          plugins: { legend: { labels: { color: '#9ca3af' } } },
-          scales: { x: { ticks: CHART_TICKS, grid: CHART_GRID }, y: { beginAtZero: true, ticks: CHART_TICKS, grid: CHART_GRID } },
-        },
-      });
-
-      // SBOM doughnut
-      const sbomCtx = document.getElementById('sbom-chart').getContext('2d');
-      if (sbomChart) sbomChart.destroy();
-      const hasData = s.total_wheels_checked > 0;
-      sbomChart = new Chart(sbomCtx, {
-        type: 'doughnut',
-        data: {
-          labels: ['With SBOM', 'Without SBOM'],
-          datasets: [{ data: hasData ? [s.wheels_with_sbom, s.wheels_without_sbom] : [0, 1], backgroundColor: hasData ? [COLORS.green, COLORS.gray] : ['#1f2937', '#1f2937'], borderWidth: 0 }],
-        },
-        options: { responsive: true, cutout: '65%', plugins: { legend: { labels: { color: '#9ca3af' } } } },
-      });
     }
 
     function renderTimeSeries(series) {
@@ -224,48 +217,19 @@
 
       const labels = series.map(p => new Date(p.timestamp * 1000));
 
-      // Requests over time (stacked area)
-      const pypiReqs = series.map(p => p.cache.pypi_metadata.hits + p.cache.pypi_metadata.misses);
-      const sbomReqs = series.map(p => p.cache.sbom_content.hits + p.cache.sbom_content.misses);
-      const negReqs = series.map(p => p.cache.negative_cache.hits + p.cache.negative_cache.misses);
+      // Packages explored per day (bar chart)
+      const newExplored = series.map(p => p.packages.new_explored);
+      const newWithSbom = series.map(p => p.packages.new_with_sbom);
 
-      const reqCtx = document.getElementById('requests-time-chart').getContext('2d');
-      if (requestsTimeChart) requestsTimeChart.destroy();
-      requestsTimeChart = new Chart(reqCtx, {
-        type: 'line',
+      const pkgCtx = document.getElementById('packages-time-chart').getContext('2d');
+      if (packagesTimeChart) packagesTimeChart.destroy();
+      packagesTimeChart = new Chart(pkgCtx, {
+        type: 'bar',
         data: {
           labels,
           datasets: [
-            { label: 'PyPI Metadata', data: pypiReqs, borderColor: COLORS.blue, backgroundColor: COLORS.blueAlpha, fill: true, tension: 0.3, pointRadius: 0 },
-            { label: 'SBOM Content', data: sbomReqs, borderColor: COLORS.purple, backgroundColor: COLORS.purpleAlpha, fill: true, tension: 0.3, pointRadius: 0 },
-            { label: 'Negative Cache', data: negReqs, borderColor: COLORS.amber, backgroundColor: COLORS.amberAlpha, fill: true, tension: 0.3, pointRadius: 0 },
-          ],
-        },
-        options: {
-          responsive: true,
-          interaction: { mode: 'index', intersect: false },
-          plugins: { legend: { labels: { color: '#9ca3af' } } },
-          scales: { x: TIME_SCALE, y: { beginAtZero: true, stacked: true, ticks: CHART_TICKS, grid: CHART_GRID } },
-        },
-      });
-
-      // Hit ratio over time
-      function ratio(h, m) { const t = h + m; return t > 0 ? (h / t) * 100 : null; }
-
-      const pypiRatio = series.map(p => ratio(p.cache.pypi_metadata.hits, p.cache.pypi_metadata.misses));
-      const sbomRatio = series.map(p => ratio(p.cache.sbom_content.hits, p.cache.sbom_content.misses));
-      const negRatio = series.map(p => ratio(p.cache.negative_cache.hits, p.cache.negative_cache.misses));
-
-      const hrCtx = document.getElementById('hitratio-time-chart').getContext('2d');
-      if (hitratioTimeChart) hitratioTimeChart.destroy();
-      hitratioTimeChart = new Chart(hrCtx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [
-            { label: 'PyPI Metadata', data: pypiRatio, borderColor: COLORS.blue, tension: 0.3, pointRadius: 2, spanGaps: true },
-            { label: 'SBOM Content', data: sbomRatio, borderColor: COLORS.purple, tension: 0.3, pointRadius: 2, spanGaps: true },
-            { label: 'Negative Cache', data: negRatio, borderColor: COLORS.amber, tension: 0.3, pointRadius: 2, spanGaps: true },
+            { label: 'New packages explored', data: newExplored, backgroundColor: COLORS.blue, borderRadius: 3 },
+            { label: 'With SBOM', data: newWithSbom, backgroundColor: COLORS.green, borderRadius: 3 },
           ],
         },
         options: {
@@ -274,19 +238,19 @@
           plugins: { legend: { labels: { color: '#9ca3af' } } },
           scales: {
             x: TIME_SCALE,
-            y: { min: 0, max: 100, ticks: { ...CHART_TICKS, callback: v => v + '%' }, grid: CHART_GRID },
+            y: { beginAtZero: true, ticks: CHART_TICKS, grid: CHART_GRID },
           },
         },
       });
 
-      // SBOM discovery over time (cumulative)
-      let cumWith = 0, cumWithout = 0;
-      const withData = [], withoutData = [];
+      // Cumulative SBOM discovery
+      let cumExplored = 0, cumWithSbom = 0;
+      const cumExploredData = [], cumWithSbomData = [];
       for (const p of series) {
-        cumWith += p.sbom_availability.wheels_with_sbom;
-        cumWithout += p.sbom_availability.wheels_without_sbom;
-        withData.push(cumWith);
-        withoutData.push(cumWithout);
+        cumExplored += p.packages.new_explored;
+        cumWithSbom += p.packages.new_with_sbom;
+        cumExploredData.push(cumExplored);
+        cumWithSbomData.push(cumWithSbom);
       }
 
       const stCtx = document.getElementById('sbom-time-chart').getContext('2d');
@@ -296,8 +260,8 @@
         data: {
           labels,
           datasets: [
-            { label: 'With SBOM', data: withData, borderColor: COLORS.green, backgroundColor: COLORS.greenAlpha, fill: true, tension: 0.3, pointRadius: 0 },
-            { label: 'Without SBOM', data: withoutData, borderColor: COLORS.red, backgroundColor: COLORS.redAlpha, fill: true, tension: 0.3, pointRadius: 0 },
+            { label: 'Total explored', data: cumExploredData, borderColor: COLORS.blue, backgroundColor: COLORS.blueAlpha, fill: true, tension: 0.3, pointRadius: 0 },
+            { label: 'With SBOM', data: cumWithSbomData, borderColor: COLORS.green, backgroundColor: COLORS.greenAlpha, fill: true, tension: 0.3, pointRadius: 0 },
           ],
         },
         options: {

@@ -116,11 +116,11 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
         return []
     result = [{"path": s.path, "content": s.content, "media_type": s.media_type} for s in sbom_files]
     await cache.set_sbom_content(wheel.url, result)
-    # Track SBOM formats
+    # Track SBOM formats (deduplicated by wheel_url:path)
     for sbom in sbom_files:
         fmt = _detect_sbom_format(sbom.content, sbom.media_type)
         if fmt:
-            await cache.incr_sbom_format(fmt)
+            await cache.track_sbom_format(f"{wheel.url}:{sbom.path}", fmt)
     return result
 
 
@@ -213,6 +213,7 @@ async def resolve_purl(
         if sboms:
             sboms_by_wheel[wheel.url] = sboms
     await _store_uuid_lookups(cache, name, version, wheels, sboms_by_wheel)
+    await cache.track_package_query(name, version, has_sbom=bool(sboms_by_wheel))
     return name, version, metadata, wheels, sboms_by_wheel
 
 

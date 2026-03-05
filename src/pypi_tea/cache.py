@@ -13,6 +13,17 @@ STATS_BUCKET_PREFIX = "stats:ts:"
 STATS_BUCKET_SIZE = 86400  # 24 hours
 STATS_RETENTION = 86400 * 30  # 30 days
 
+# Persistent sets for accurate unique counting (no TTL)
+UNIQUE_PACKAGES = "unique:packages"
+UNIQUE_PACKAGES_WITH_SBOM = "unique:packages_with_sbom"
+UNIQUE_WHEELS_WITH_SBOM = "unique:wheels_with_sbom"
+UNIQUE_WHEELS_WITHOUT_SBOM = "unique:wheels_without_sbom"
+UNIQUE_SBOM_FORMATS_TRACKED = "unique:sbom_formats_tracked"
+
+# Daily set prefixes for time series (with TTL)
+DAILY_PACKAGES_PREFIX = "daily:packages:"
+DAILY_PACKAGES_WITH_SBOM_PREFIX = "daily:packages_with_sbom:"
+
 
 def _current_bucket() -> int:
     return int(time.time()) // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
@@ -68,12 +79,8 @@ class Cache:
         return json.loads(data)  # type: ignore[no-any-return]
 
     async def set_sbom_content(self, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
-        is_new = await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL, nx=True)
-        if is_new:
-            await self._incr_stat("sbom:wheels_with_sbom")
-        else:
-            # Update the value and TTL even if key existed
-            await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
+        await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
+        await self._client.sadd(UNIQUE_WHEELS_WITH_SBOM, wheel_url)  # type: ignore[misc]
 
     # --- Negative cache ---
 
@@ -86,18 +93,34 @@ class Cache:
         return exists
 
     async def set_negative_cache(self, wheel_url: str) -> None:
-        is_new = await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL, nx=True)
-        if is_new:
-            await self._incr_stat("sbom:wheels_without_sbom")
-        else:
-            # Refresh TTL even if key existed
-            await self._client.expire(f"neg:{wheel_url}", NEGATIVE_TTL)
+        await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL)
+        await self._client.sadd(UNIQUE_WHEELS_WITHOUT_SBOM, wheel_url)  # type: ignore[misc]
 
     # --- SBOM format tracking ---
 
-    async def incr_sbom_format(self, format_key: str) -> None:
-        """Track SBOM format occurrences. format_key e.g. 'CycloneDX/1.6', 'SPDX/2.3'."""
-        await self._incr_stat(f"sbom_format:{format_key}")
+    async def track_sbom_format(self, sbom_id: str, format_key: str) -> None:
+        """Track SBOM format for a unique SBOM file. Deduplicates via persistent set."""
+        is_new = await self._client.sadd(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
+        if is_new:
+            await self._incr_stat(f"sbom_format:{format_key}")
+
+    # --- Package-level tracking ---
+
+    async def track_package_query(self, package: str, version: str, has_sbom: bool) -> None:
+        """Track a unique package@version query for community-facing stats."""
+        key = f"{package}@{version}"
+        bucket = _current_bucket()
+        pipe = self._client.pipeline()
+        pipe.sadd(UNIQUE_PACKAGES, key)
+        daily_key = f"{DAILY_PACKAGES_PREFIX}{bucket}"
+        pipe.sadd(daily_key, key)
+        pipe.expire(daily_key, STATS_RETENTION)
+        if has_sbom:
+            pipe.sadd(UNIQUE_PACKAGES_WITH_SBOM, key)
+            daily_sbom_key = f"{DAILY_PACKAGES_WITH_SBOM_PREFIX}{bucket}"
+            pipe.sadd(daily_sbom_key, key)
+            pipe.expire(daily_sbom_key, STATS_RETENTION)
+        await pipe.execute()
 
     # --- UUID lookup ---
 
@@ -153,60 +176,38 @@ class Cache:
 
     # --- Statistics ---
 
-    def _build_summary(self, counters: dict[str, int]) -> dict[str, Any]:
-        pypi_hit = counters.get("pypi:hit", 0)
-        pypi_miss = counters.get("pypi:miss", 0)
-        pypi_total = pypi_hit + pypi_miss
-
-        sbom_hit = counters.get("sbom:hit", 0)
-        sbom_miss = counters.get("sbom:miss", 0)
-        sbom_total = sbom_hit + sbom_miss
-
-        neg_hit = counters.get("negative:hit", 0)
-        neg_miss = counters.get("negative:miss", 0)
-        neg_total = neg_hit + neg_miss
-
-        wheels_with = counters.get("sbom:wheels_with_sbom", 0)
-        wheels_without = counters.get("sbom:wheels_without_sbom", 0)
-        wheels_total = wheels_with + wheels_without
-
-        # Extract SBOM format counters
-        sbom_formats: dict[str, int] = {}
-        for key, val in counters.items():
-            if key.startswith("sbom_format:"):
-                sbom_formats[key.removeprefix("sbom_format:")] = val
-
-        return {
-            "cache": {
-                "pypi_metadata": {
-                    "hits": pypi_hit,
-                    "misses": pypi_miss,
-                    "hit_ratio": round(pypi_hit / pypi_total, 4) if pypi_total else None,
-                },
-                "sbom_content": {
-                    "hits": sbom_hit,
-                    "misses": sbom_miss,
-                    "hit_ratio": round(sbom_hit / sbom_total, 4) if sbom_total else None,
-                },
-                "negative_cache": {
-                    "hits": neg_hit,
-                    "misses": neg_miss,
-                    "hit_ratio": round(neg_hit / neg_total, 4) if neg_total else None,
-                },
-            },
-            "sbom_availability": {
-                "wheels_with_sbom": wheels_with,
-                "wheels_without_sbom": wheels_without,
-                "total_wheels_checked": wheels_total,
-                "sbom_percentage": round(wheels_with / wheels_total * 100, 2) if wheels_total else None,
-            },
-            "sbom_formats": sbom_formats,
-        }
+    @staticmethod
+    def _extract_sbom_formats(counters: dict[str, int]) -> dict[str, int]:
+        return {k.removeprefix("sbom_format:"): v for k, v in counters.items() if k.startswith("sbom_format:")}
 
     async def get_stats(self) -> dict[str, Any]:
         raw = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
         counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
-        return self._build_summary(counters)
+
+        pipe = self._client.pipeline()
+        pipe.scard(UNIQUE_PACKAGES)
+        pipe.scard(UNIQUE_PACKAGES_WITH_SBOM)
+        pipe.scard(UNIQUE_WHEELS_WITH_SBOM)
+        pipe.scard(UNIQUE_WHEELS_WITHOUT_SBOM)
+        pkg_total, pkg_with_sbom, wheels_with, wheels_without = await pipe.execute()
+
+        wheels_total = wheels_with + wheels_without
+
+        return {
+            "packages": {
+                "total_explored": pkg_total,
+                "with_sbom": pkg_with_sbom,
+                "without_sbom": pkg_total - pkg_with_sbom,
+                "sbom_percentage": round(pkg_with_sbom / pkg_total * 100, 2) if pkg_total else None,
+            },
+            "wheels": {
+                "total_checked": wheels_total,
+                "with_sbom": wheels_with,
+                "without_sbom": wheels_without,
+                "sbom_percentage": round(wheels_with / wheels_total * 100, 2) if wheels_total else None,
+            },
+            "sbom_formats": self._extract_sbom_formats(counters),
+        }
 
     async def get_stats_timeseries(self) -> list[dict[str, Any]]:
         now = int(time.time())
@@ -214,7 +215,6 @@ class Cache:
         oldest_bucket = oldest // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
         current = _current_bucket()
 
-        # Collect all bucket keys to fetch
         bucket_times: list[int] = []
         t = oldest_bucket
         while t <= current:
@@ -226,18 +226,30 @@ class Cache:
 
         pipe = self._client.pipeline()
         for bt in bucket_times:
+            pipe.scard(f"{DAILY_PACKAGES_PREFIX}{bt}")
+            pipe.scard(f"{DAILY_PACKAGES_WITH_SBOM_PREFIX}{bt}")
             pipe.hgetall(f"{STATS_BUCKET_PREFIX}{bt}")
         results = await pipe.execute()
 
         series: list[dict[str, Any]] = []
-        for bt, raw in zip(bucket_times, results, strict=True):
-            if not raw:
+        for i, bt in enumerate(bucket_times):
+            pkg_new = results[i * 3]
+            pkg_with_sbom_new = results[i * 3 + 1]
+            raw = results[i * 3 + 2]
+
+            if not pkg_new and not raw:
                 continue
-            counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
+
+            counters: dict[str, int] = {k: int(v) for k, v in raw.items()} if raw else {}
+
             series.append(
                 {
                     "timestamp": bt,
-                    **self._build_summary(counters),
+                    "packages": {
+                        "new_explored": pkg_new,
+                        "new_with_sbom": pkg_with_sbom_new,
+                    },
+                    "sbom_formats": self._extract_sbom_formats(counters),
                 }
             )
         return series
