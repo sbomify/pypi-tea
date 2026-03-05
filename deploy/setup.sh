@@ -21,6 +21,7 @@ mkdir -p "${INSTALL_DIR}"
 cp -r "${REPO_DIR}/src" "${INSTALL_DIR}/"
 cp "${REPO_DIR}/pyproject.toml" "${INSTALL_DIR}/"
 cp "${REPO_DIR}/uv.lock" "${INSTALL_DIR}/"
+cp "${REPO_DIR}/README.md" "${INSTALL_DIR}/"
 
 # Build the venv as root so nobody never needs write access
 echo "==> Building virtualenv"
