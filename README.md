@@ -1,5 +1,11 @@
 # pypi-tea
 
+[![CI](https://github.com/sbomify/pypi-tea/actions/workflows/pypi.yaml/badge.svg)](https://github.com/sbomify/pypi-tea/actions/workflows/pypi.yaml)
+[![PyPI version](https://img.shields.io/pypi/v/pypi-tea.svg)](https://pypi.org/project/pypi-tea/)
+[![Python](https://img.shields.io/pypi/pyversions/pypi-tea.svg)](https://pypi.org/project/pypi-tea/)
+[![License](https://img.shields.io/github/license/sbomify/pypi-tea.svg)](https://github.com/sbomify/pypi-tea/blob/master/LICENSE)
+[![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://trust.sbomify.com/component/pypi-tea/)
+
 A [Transparency Exchange API (TEA)](https://github.com/CycloneDX/transparency-exchange-api) server that extracts and serves SBOMs from PyPI packages.
 
 Python wheels can include SBOMs in `.dist-info/sboms/` ([PEP 770](https://peps.python.org/pep-0770/)). pypi-tea makes these discoverable through the TEA protocol — give it a PURL like `pkg:pypi/requests@2.31.0` and it returns any SBOMs found in the package's wheel files.
