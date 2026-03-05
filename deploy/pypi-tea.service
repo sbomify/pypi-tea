@@ -17,7 +17,7 @@ Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
 Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
 Environment=HOME=/tmp/pypi-tea
 
-ExecStart=/usr/local/bin/uvx --python 3.14 --from pypi-tea uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
+ExecStart=/usr/local/bin/uvx --python 3.14 --from pypi-tea uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
 
 Restart=on-failure
 RestartSec=5
