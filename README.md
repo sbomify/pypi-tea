@@ -154,7 +154,7 @@ sudo systemctl start pypi-tea
 
 The setup script creates a dedicated `pypi-tea` system user and installs the systemd service. The service uses `uvx` to run pypi-tea directly from PyPI — no cloning or venv management needed.
 
-To override configuration:
+**Important:** Set `PYPI_TEA_SERVER_ROOT_URL` to your public URL — this is used in TEA discovery responses so clients know where to reach your server.
 
 ```bash
 sudo systemctl edit pypi-tea
@@ -162,8 +162,8 @@ sudo systemctl edit pypi-tea
 
 ```ini
 [Service]
-Environment=PYPI_TEA_REDIS_URL=redis://my-redis:6379/1
 Environment=PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
+Environment=PYPI_TEA_REDIS_URL=redis://my-redis:6379/1
 ```
 
 Logs:
