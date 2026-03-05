@@ -12,8 +12,10 @@ Group=nogroup
 Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
 Environment=PYPI_TEA_SERVER_ROOT_URL=http://localhost:8000
 
-# uvx needs a writable cache dir
-Environment=XDG_CACHE_HOME=/tmp/pypi-tea-cache
+# uvx needs writable dirs for cache and tool installs
+Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
+Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
+Environment=HOME=/tmp/pypi-tea
 
 ExecStart=/usr/local/bin/uvx --from pypi-tea uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
 
@@ -24,7 +26,7 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp/pypi-tea-cache
+ReadWritePaths=/tmp/pypi-tea
 
 [Install]
 WantedBy=multi-user.target

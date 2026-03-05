@@ -11,9 +11,9 @@ if ! command -v uv &>/dev/null; then
     cp ~/.local/bin/uv /usr/local/bin/uv
 fi
 
-# Create cache dir for uvx (nobody needs write access here)
-mkdir -p /tmp/pypi-tea-cache
-chown nobody:nogroup /tmp/pypi-tea-cache
+# Create writable dir for uvx cache and tool installs
+mkdir -p /tmp/pypi-tea
+chown nobody:nogroup /tmp/pypi-tea
 
 # Install systemd service
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
