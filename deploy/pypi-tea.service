@@ -1,0 +1,32 @@
+[Unit]
+Description=pypi-tea - TEA Server for PyPI Package SBOMs
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=exec
+User=pypi-tea
+Group=pypi-tea
+
+# App configuration
+Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
+Environment=PYPI_TEA_SERVER_ROOT_URL=http://localhost:8000
+
+# uvx needs writable dirs for cache and tool installs
+Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
+Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
+Environment=HOME=/tmp/pypi-tea
+
+ExecStart=/usr/local/bin/uvx --from pypi-tea uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp/pypi-tea
+
+[Install]
+WantedBy=multi-user.target

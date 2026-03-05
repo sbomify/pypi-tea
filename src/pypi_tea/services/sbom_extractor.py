@@ -9,6 +9,8 @@ from remotezip import RemoteIOError, RemoteZip
 
 logger = logging.getLogger("pypi_tea.sbom_extractor")
 
+USER_AGENT = "pypi-tea/0.1.0 (https://github.com/sbomify/pypi-tea)"
+
 SBOM_MEDIA_TYPES = {
     ".cdx.json": "application/vnd.cyclonedx+json",
     ".cdx.xml": "application/vnd.cyclonedx+xml",
@@ -55,14 +57,14 @@ def _extract_from_zipfile(zf: zipfile.ZipFile) -> list[SBOMFile]:
 def _extract_sboms_sync(wheel_url: str) -> list[SBOMFile]:
     # Try range requests first (efficient for large wheels)
     try:
-        with RemoteZip(wheel_url) as rz:
+        with RemoteZip(wheel_url, headers={"User-Agent": USER_AGENT}) as rz:
             return _extract_from_zipfile(rz)
     except (RemoteIOError, Exception) as exc:
         logger.info("Range request failed for %s (%s), falling back to full download", wheel_url, exc)
 
     # Fallback: download the full wheel
     try:
-        resp = requests.get(wheel_url, timeout=120)
+        resp = requests.get(wheel_url, timeout=120, headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             return _extract_from_zipfile(zf)
