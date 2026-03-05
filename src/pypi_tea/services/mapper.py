@@ -244,7 +244,8 @@ def build_product_release(
     wheels: list[WheelInfo],
     sboms_by_wheel: dict[str, list[dict[str, Any]]],
 ) -> ProductRelease:
-    upload_time = metadata.get("urls", [{}])[0].get("upload_time_iso_8601")
+    urls = metadata.get("urls", [])
+    upload_time = urls[0].get("upload_time_iso_8601") if urls else None
     created = datetime.fromisoformat(upload_time) if upload_time else datetime.now(UTC)
     if created.tzinfo is None:
         created = created.replace(tzinfo=UTC)
@@ -284,7 +285,8 @@ def build_collection_for_product_release(
 def build_component_release_with_collection(
     wheel: WheelInfo, version: str, metadata: dict[str, Any], sboms: list[dict[str, Any]]
 ) -> ComponentReleaseWithCollection:
-    upload_time = metadata.get("urls", [{}])[0].get("upload_time_iso_8601")
+    urls = metadata.get("urls", [])
+    upload_time = urls[0].get("upload_time_iso_8601") if urls else None
     created = datetime.fromisoformat(upload_time) if upload_time else datetime.now(UTC)
     if created.tzinfo is None:
         created = created.replace(tzinfo=UTC)
