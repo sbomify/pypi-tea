@@ -39,7 +39,7 @@ jobs:
           OUTPUT_FILE: pypi-tea.cdx.json
           AUGMENT: "true"
           ENRICH: "true"
-          UPLOAD: "false"
+          UPLOAD: "true"
 
       - name: Determine version
         id: version
@@ -96,7 +96,7 @@ jobs:
           OUTPUT_FILE: pypi-tea.cdx.json
           AUGMENT: "true"
           ENRICH: "true"
-          UPLOAD: "false"
+          UPLOAD: "true"
 
       - name: Build wheel
         run: uv build
