@@ -24,18 +24,22 @@
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div class="text-xs text-gray-500 uppercase tracking-wide">Packages Explored</div>
           <div id="packages-explored" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-600 mt-1">Unique package versions checked</div>
         </div>
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div class="text-xs text-gray-500 uppercase tracking-wide">Packages with SBOMs</div>
           <div id="packages-with-sbom" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-600 mt-1">At least one wheel contains an SBOM</div>
         </div>
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div class="text-xs text-gray-500 uppercase tracking-wide">SBOM Coverage</div>
           <div id="sbom-coverage" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-600 mt-1">Percentage of packages with SBOMs</div>
         </div>
         <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div class="text-xs text-gray-500 uppercase tracking-wide">Wheels with SBOMs</div>
           <div id="wheels-with-sbom" class="text-2xl font-semibold mt-1">-</div>
+          <div class="text-xs text-gray-600 mt-1">Individual .whl files containing SBOMs</div>
         </div>
       </div>
 
@@ -65,7 +69,8 @@
 
       <!-- Wheel-level detail -->
       <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-        <h2 class="text-sm font-medium text-gray-400 mb-4">Wheel-Level Breakdown</h2>
+        <h2 class="text-sm font-medium text-gray-400 mb-2">Wheel-Level Breakdown</h2>
+        <p class="text-xs text-gray-600 mb-4">Each package version ships multiple wheels (one per platform/Python version). This shows SBOM coverage at the individual wheel level.</p>
         <div class="grid grid-cols-3 gap-4 text-center">
           <div>
             <div class="text-xs text-gray-500 uppercase tracking-wide">Total Wheels</div>
@@ -116,7 +121,35 @@
       amberAlpha: 'rgba(245, 158, 11, 0.15)',
       purple: 'rgb(168, 85, 247)',
       gray: 'rgb(107, 114, 128)',
+      cyan: 'rgb(6, 182, 212)',
+      teal: 'rgb(20, 184, 166)',
+      indigo: 'rgb(99, 102, 241)',
+      rose: 'rgb(244, 63, 94)',
     };
+
+    // Color palettes per SBOM family — cycled through for any version
+    const CDX_PALETTE = [
+      'rgb(30, 64, 175)',   // blue-800
+      'rgb(59, 130, 246)',  // blue-500
+      'rgb(6, 182, 212)',   // cyan-500
+      'rgb(20, 184, 166)',  // teal-500
+      'rgb(34, 197, 94)',   // green-500
+      'rgb(132, 204, 22)',  // lime-500
+    ];
+    const SPDX_PALETTE = [
+      'rgb(88, 28, 135)',   // purple-800
+      'rgb(168, 85, 247)',  // purple-500
+      'rgb(99, 102, 241)',  // indigo-500
+      'rgb(192, 132, 252)', // purple-400
+      'rgb(139, 92, 246)',  // violet-500
+    ];
+    const OTHER_PALETTE = [COLORS.amber, COLORS.rose, COLORS.red];
+
+    function getFormatColor(name, indexInFamily) {
+      if (name.startsWith('CycloneDX')) return CDX_PALETTE[indexInFamily % CDX_PALETTE.length];
+      if (name.startsWith('SPDX')) return SPDX_PALETTE[indexInFamily % SPDX_PALETTE.length];
+      return OTHER_PALETTE[indexInFamily % OTHER_PALETTE.length];
+    }
 
     const CHART_GRID = { color: '#1f2937' };
     const CHART_TICKS = { color: '#6b7280' };
@@ -189,7 +222,15 @@
         formatsCanvas.classList.remove('hidden');
         const fmtCtx = formatsCanvas.getContext('2d');
         if (formatsChart) formatsChart.destroy();
-        const fmtColors = formatEntries.map(([name]) => name.startsWith('CycloneDX') ? COLORS.blue : COLORS.purple);
+        // Assign colors by family so each CycloneDX/SPDX version gets a distinct shade
+        const familyCounts = {};
+        const fmtColors = formatEntries.map(([name]) => {
+          const family = name.split('/')[0];
+          familyCounts[family] = (familyCounts[family] || 0);
+          const color = getFormatColor(name, familyCounts[family]);
+          familyCounts[family]++;
+          return color;
+        });
         formatsChart = new Chart(fmtCtx, {
           type: 'doughnut',
           data: {

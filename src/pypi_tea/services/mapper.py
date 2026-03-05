@@ -104,11 +104,20 @@ def _detect_sbom_format(content: str, media_type: str) -> str | None:
     return None
 
 
+async def _track_sbom_formats(cache: Cache, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
+    """Track SBOM formats, deduplicated by wheel_url:path."""
+    for sbom in sboms:
+        fmt = _detect_sbom_format(sbom["content"], sbom["media_type"])
+        if fmt:
+            await cache.track_sbom_format(f"{wheel_url}:{sbom['path']}", fmt)
+
+
 async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str, Any]]:
     if await cache.is_negative_cached(wheel.url):
         return []
     cached = await cache.get_sbom_content(wheel.url)
     if cached is not None:
+        await _track_sbom_formats(cache, wheel.url, cached)
         return cached
     sbom_files = await extract_sboms(wheel.url, wheel_size=wheel.size)
     if not sbom_files:
@@ -116,11 +125,7 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
         return []
     result = [{"path": s.path, "content": s.content, "media_type": s.media_type} for s in sbom_files]
     await cache.set_sbom_content(wheel.url, result)
-    # Track SBOM formats (deduplicated by wheel_url:path)
-    for sbom in sbom_files:
-        fmt = _detect_sbom_format(sbom.content, sbom.media_type)
-        if fmt:
-            await cache.track_sbom_format(f"{wheel.url}:{sbom.path}", fmt)
+    await _track_sbom_formats(cache, wheel.url, result)
     return result
 
 
