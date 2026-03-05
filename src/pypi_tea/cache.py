@@ -106,16 +106,6 @@ class Cache:
         format, it's a no-op; if the format changes, both old and new counts
         are updated.
         """
-        # Migrate from old set-based tracking to hash map on first access
-        key_type = await self._client.type(UNIQUE_SBOM_FORMATS_TRACKED)
-        if key_type == "set":
-            await self._client.delete(UNIQUE_SBOM_FORMATS_TRACKED)
-            # Clear stale format counters so they rebuild from scratch
-            raw: dict[str, str] = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
-            stale_keys = [k for k in raw if k.startswith("sbom_format:")]
-            if stale_keys:
-                await self._client.hdel(STATS_KEY, *stale_keys)  # type: ignore[misc]
-
         previous: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
         if previous == format_key:
             return  # already tracked correctly
