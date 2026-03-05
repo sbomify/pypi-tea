@@ -8,24 +8,23 @@ Type=exec
 User=nobody
 Group=nogroup
 
-WorkingDirectory=/opt/pypi-tea
-
 # App configuration
 Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
 Environment=PYPI_TEA_SERVER_ROOT_URL=http://localhost:8000
 
-# Venv is pre-built by setup.sh — run directly from it
-ExecStart=/opt/pypi-tea/.venv/bin/uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
+# uvx needs a writable cache dir
+Environment=XDG_CACHE_HOME=/tmp/pypi-tea-cache
+
+ExecStart=/usr/local/bin/uvx --from pypi-tea uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000
 
 Restart=on-failure
 RestartSec=5
 
-# Hardening — nobody has zero write access
+# Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/opt/pypi-tea
-TemporaryFileSystem=/tmp:ro
+ReadWritePaths=/tmp/pypi-tea-cache
 
 [Install]
 WantedBy=multi-user.target

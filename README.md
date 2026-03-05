@@ -152,7 +152,7 @@ sudo ./deploy/setup.sh
 sudo systemctl start pypi-tea
 ```
 
-This installs the project and pre-builds the virtualenv under `/opt/pypi-tea` (owned by root, read-only). The service runs as `nobody` with zero write access — the venv is invoked directly, no uv needed at runtime.
+This uses `uvx` to run pypi-tea directly from PyPI — no cloning or venv management needed. The service runs as `nobody` with `uvx` handling the tool environment automatically.
 
 To override configuration:
 
