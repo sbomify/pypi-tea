@@ -152,7 +152,7 @@ sudo ./deploy/setup.sh
 sudo systemctl start pypi-tea
 ```
 
-This installs the project to `/opt/pypi-tea` (read-only) and runs as the `nobody` user. uv's cache and virtualenv are stored under `/tmp/pypi-tea` since `nobody` has no home directory and no write access to `/opt`.
+This installs the project and pre-builds the virtualenv under `/opt/pypi-tea` (owned by root, read-only). The service runs as `nobody` with zero write access — the venv is invoked directly, no uv needed at runtime.
 
 To override configuration:
 
