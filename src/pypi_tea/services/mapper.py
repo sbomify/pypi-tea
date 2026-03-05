@@ -110,7 +110,7 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
     cached = await cache.get_sbom_content(wheel.url)
     if cached is not None:
         return cached
-    sbom_files = await extract_sboms(wheel.url)
+    sbom_files = await extract_sboms(wheel.url, wheel_size=wheel.size)
     if not sbom_files:
         await cache.set_negative_cache(wheel.url)
         return []

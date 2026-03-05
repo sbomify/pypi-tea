@@ -69,7 +69,7 @@ async def download_artifact(
                 return Response(content=sbom["content"], media_type=media_type)
 
     # Cache miss — re-extract from wheel
-    sbom_files = await extract_sboms(wheel_url)
+    sbom_files = await extract_sboms(wheel_url, wheel_size=None)
     for sbom_file in sbom_files:
         if sbom_file.path == sbom_path:
             return Response(content=sbom_file.content, media_type=sbom_file.media_type)

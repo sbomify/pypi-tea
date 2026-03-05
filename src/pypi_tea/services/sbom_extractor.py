@@ -1,6 +1,6 @@
 import asyncio
-import io
 import logging
+import tempfile
 import zipfile
 from dataclasses import dataclass
 
@@ -10,6 +10,15 @@ from remotezip import RemoteIOError, RemoteZip
 logger = logging.getLogger("pypi_tea.sbom_extractor")
 
 USER_AGENT = "pypi-tea/0.1.0 (https://github.com/sbomify/pypi-tea)"
+
+# Skip full-download fallback for wheels larger than this (bytes).
+# Range requests still work for any size — this only limits the fallback
+# that loads the entire wheel into memory.
+MAX_FULL_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Limit concurrent extractions to avoid memory pressure from multiple
+# large wheels being processed simultaneously.
+_extraction_semaphore = asyncio.Semaphore(3)
 
 SBOM_MEDIA_TYPES = {
     ".cdx.json": "application/vnd.cyclonedx+json",
@@ -54,7 +63,7 @@ def _extract_from_zipfile(zf: zipfile.ZipFile) -> list[SBOMFile]:
     return sboms
 
 
-def _extract_sboms_sync(wheel_url: str) -> list[SBOMFile]:
+def _extract_sboms_sync(wheel_url: str, wheel_size: int | None = None) -> list[SBOMFile]:
     # Try range requests first (efficient for large wheels)
     try:
         with RemoteZip(wheel_url, headers={"User-Agent": USER_AGENT}, support_suffix_range=False) as rz:
@@ -62,16 +71,31 @@ def _extract_sboms_sync(wheel_url: str) -> list[SBOMFile]:
     except (RemoteIOError, Exception) as exc:
         logger.info("Range request failed for %s (%s), falling back to full download", wheel_url, exc)
 
-    # Fallback: download the full wheel
+    # Fallback: download the full wheel — but skip if too large
+    if wheel_size is not None and wheel_size > MAX_FULL_DOWNLOAD_BYTES:
+        logger.info(
+            "Skipping full download for %s (%.1f MB exceeds %d MB limit)",
+            wheel_url,
+            wheel_size / 1024 / 1024,
+            MAX_FULL_DOWNLOAD_BYTES // 1024 // 1024,
+        )
+        return []
+
     try:
-        resp = requests.get(wheel_url, timeout=120, headers={"User-Agent": USER_AGENT})
-        resp.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            return _extract_from_zipfile(zf)
+        # Stream to a temp file instead of buffering in memory
+        with requests.get(wheel_url, timeout=120, headers={"User-Agent": USER_AGENT}, stream=True) as resp:
+            resp.raise_for_status()
+            with tempfile.SpooledTemporaryFile(max_size=MAX_FULL_DOWNLOAD_BYTES) as tmp:
+                for chunk in resp.iter_content(chunk_size=256 * 1024):
+                    tmp.write(chunk)
+                tmp.seek(0)
+                with zipfile.ZipFile(tmp) as zf:
+                    return _extract_from_zipfile(zf)
     except Exception:
         logger.exception("Failed to extract SBOMs from %s", wheel_url)
         return []
 
 
-async def extract_sboms(wheel_url: str) -> list[SBOMFile]:
-    return await asyncio.to_thread(_extract_sboms_sync, wheel_url)
+async def extract_sboms(wheel_url: str, wheel_size: int | None = None) -> list[SBOMFile]:
+    async with _extraction_semaphore:
+        return await asyncio.to_thread(_extract_sboms_sync, wheel_url, wheel_size)
