@@ -99,10 +99,32 @@ class Cache:
     # --- SBOM format tracking ---
 
     async def track_sbom_format(self, sbom_id: str, format_key: str) -> None:
-        """Track SBOM format for a unique SBOM file. Deduplicates via persistent set."""
-        is_new = await self._client.sadd(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
-        if is_new:
-            await self._incr_stat(f"sbom_format:{format_key}")
+        """Track SBOM format for a unique SBOM file.
+
+        Stores the format per sbom_id in a hash map. This is idempotent and
+        self-correcting: if the same sbom_id is tracked again with the same
+        format, it's a no-op; if the format changes, both old and new counts
+        are updated.
+        """
+        # Migrate from old set-based tracking to hash map on first access
+        key_type = await self._client.type(UNIQUE_SBOM_FORMATS_TRACKED)
+        if key_type == "set":
+            await self._client.delete(UNIQUE_SBOM_FORMATS_TRACKED)
+            # Clear stale format counters so they rebuild from scratch
+            raw: dict[str, str] = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
+            stale_keys = [k for k in raw if k.startswith("sbom_format:")]
+            if stale_keys:
+                await self._client.hdel(STATS_KEY, *stale_keys)  # type: ignore[misc]
+
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
+        if previous == format_key:
+            return  # already tracked correctly
+        pipe = self._client.pipeline()
+        pipe.hset(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id, format_key)
+        if previous:
+            pipe.hincrby(STATS_KEY, f"sbom_format:{previous}", -1)
+        pipe.hincrby(STATS_KEY, f"sbom_format:{format_key}", 1)
+        await pipe.execute()
 
     # --- Package-level tracking ---
 
