@@ -7,10 +7,56 @@ Python wheels can include SBOMs in `.dist-info/sboms/` ([PEP 770](https://peps.p
 ## How it works
 
 1. Client queries with a TEI or PURL identifier
-2. Server resolves the package via the PyPI JSON API
-3. Wheel files are inspected using HTTP range requests (via `remotezip`) to avoid downloading full wheels
-4. SBOM files from `.dist-info/sboms/` are extracted and mapped to TEA entities
-5. Results are cached in Redis and served as TEA-compliant responses
+2. Server resolves the package via the [PyPI JSON API](https://docs.pypi.org/api/json/)
+3. Wheel files are inspected using HTTP range requests (via `remotezip`) to avoid downloading full wheels — only the ZIP central directory (~16KB) is fetched to check for `.dist-info/sboms/` entries
+4. If range requests aren't supported (some CDN configurations), falls back to downloading the full wheel
+5. SBOM files are extracted and mapped to TEA entities
+6. Everything is cached in Redis and served as TEA-compliant responses
+
+## Architecture
+
+```
+┌──────────┐     TEI/PURL      ┌───────────┐     JSON API     ┌─────────┐
+│  Client   │ ───────────────> │  pypi-tea  │ ──────────────> │  PyPI   │
+└──────────┘                   │  (FastAPI) │                  └─────────┘
+                               │            │   range request   ┌─────────┐
+                               │            │ ──────────────> │  Wheel  │
+                               │            │   (or full GET)   │  files  │
+                               │            │                   └─────────┘
+                               │            │
+                               │            │ <──────────────> │  Redis  │
+                               └───────────┘     caching       └─────────┘
+```
+
+### Caching
+
+All data is stored in Redis. Nothing is persisted to disk — Redis is the sole data store.
+
+| Data | Redis key pattern | TTL | Description |
+|---|---|---|---|
+| PyPI metadata | `pypi:{package}:{version}` | 1 hour | JSON API response for a package version |
+| SBOM content | `sbom:{wheel_url}` | 24 hours | Extracted SBOM files from a wheel (JSON array) |
+| Negative cache | `neg:{wheel_url}` | 24 hours | Marker for wheels confirmed to have no SBOMs |
+| UUID lookup | `uuid:{uuid}` | No expiry | Maps a deterministic UUID to entity metadata |
+| Entity index | `etype:{entity_type}` | No expiry | Redis set of UUIDs per entity type (for listing) |
+| Stats (totals) | `stats` | No expiry | Redis hash with cumulative hit/miss counters |
+| Stats (time series) | `stats:ts:{bucket}` | 24 hours | Per-5-minute counter buckets for time-series graphs |
+
+**Why these TTLs?**
+- PyPI metadata changes when new versions are released — 1 hour keeps things reasonably fresh
+- Wheel contents are immutable once published — 24 hours is conservative; SBOMs won't change
+- Negative cache prevents repeatedly downloading wheels that have no SBOMs
+- UUID lookups don't expire because they map deterministic UUIDs to stable data
+
+### Statistics
+
+The server tracks cache hit/miss ratios and SBOM availability:
+
+- **Cache metrics**: hits and misses for PyPI metadata, SBOM content, and negative cache lookups
+- **SBOM availability**: how many wheels had SBOMs vs didn't
+- **Time series**: all counters are also bucketed into 5-minute intervals (24h retention) for trend visualization
+
+Visit `GET /` for a live dashboard with charts, or `GET /stats` for raw JSON.
 
 ## Quick start
 
@@ -67,7 +113,7 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 
 | Endpoint | Description |
 |---|---|
-| `GET /` | Statistics dashboard |
+| `GET /` | Statistics dashboard (Tailwind + Chart.js) |
 | `GET /stats` | Raw statistics JSON |
 | `GET /stats/timeseries` | Time-bucketed statistics (5-min intervals, 24h retention) |
 
@@ -94,7 +140,7 @@ curl "http://localhost:8000/products?idType=PURL&idValue=pkg:pypi/cyclonedx-pyth
 | Wheel file | Component + ComponentRelease | `uuid5(NS, "wheel:<filename>")` / `uuid5(NS, <wheel_url>)` |
 | SBOM file in wheel | Artifact | `uuid5(NS, "sbom:<wheel_url>:<sbom_path>")` |
 
-All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable across requests.
+All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable across requests and server restarts.
 
 ## Development
 
@@ -107,6 +153,9 @@ uv run pytest
 
 # Lint
 uv run ruff check src/ tests/
+
+# Format
+uv run ruff format src/ tests/
 
 # Type check
 uv run mypy src/
