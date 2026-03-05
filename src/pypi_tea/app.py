@@ -76,7 +76,7 @@ async def add_cache_headers(request: Request, call_next: Any) -> Response:
     path = request.url.path
     # Strip version prefix so cache rules match versioned paths too
     if path.startswith(_version_prefix):
-        path = path[len(_version_prefix):]
+        path = path[len(_version_prefix) :]
     for prefix, header in _CACHE_RULES.items():
         if path.startswith(prefix):
             response.headers["Cache-Control"] = header
