@@ -98,9 +98,7 @@ class Cache:
         await self._client.set(f"uuid:{uuid}", json.dumps(payload))
         await self._client.sadd(f"etype:{entity_type}", uuid)  # type: ignore[misc]
 
-    async def find_by_entity_type_and_field(
-        self, entity_type: str, field: str, value: str
-    ) -> list[dict[str, Any]]:
+    async def find_by_entity_type_and_field(self, entity_type: str, field: str, value: str) -> list[dict[str, Any]]:
         uuids = await self._client.smembers(f"etype:{entity_type}")  # type: ignore[misc]
         if not uuids:
             return []
@@ -215,8 +213,10 @@ class Cache:
             if not raw:
                 continue
             counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
-            series.append({
-                "timestamp": bt,
-                **self._build_summary(counters),
-            })
+            series.append(
+                {
+                    "timestamp": bt,
+                    **self._build_summary(counters),
+                }
+            )
         return series
