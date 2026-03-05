@@ -1,4 +1,4 @@
-"""Tests for /.well-known/tea, version probe, and versioned route prefix."""
+"""Tests for /.well-known/tea, version probe, versioned route prefix, and artifact download."""
 
 import httpx
 import pytest
@@ -6,6 +6,7 @@ import pytest
 from pypi_tea.config import settings
 
 TEI = "urn:tei:purl:localhost:pkg:pypi/libtea@0.4.0"
+PURL = "pkg:pypi/libtea@0.4.0"
 
 
 @pytest.fixture()
@@ -67,3 +68,49 @@ class TestVersionedRoutes:
     def test_versioned_cache_headers(self, client: httpx.Client):
         resp = client.get(f"/v{settings.tea_spec_version}/discovery", params={"tei": TEI})
         assert "max-age=3600" in resp.headers.get("cache-control", "")
+
+
+class TestArtifactDownload:
+    def _get_artifact_uuid(self, client: httpx.Client) -> str:
+        """Resolve the PURL and find an artifact UUID from the collection."""
+        prefix = f"/v{settings.tea_spec_version}"
+        # Trigger resolution so UUIDs are cached
+        resp = client.get(f"{prefix}/discovery", params={"tei": TEI})
+        assert resp.status_code == 200
+        discovery = resp.json()
+        pr_uuid = discovery[0]["productReleaseUuid"]
+        # Get the collection which contains artifacts
+        resp = client.get(f"{prefix}/productRelease/{pr_uuid}/collection/latest")
+        assert resp.status_code == 200
+        collection = resp.json()
+        artifacts = collection.get("artifacts", [])
+        assert len(artifacts) > 0, "libtea@0.4.0 should have at least one SBOM artifact"
+        return artifacts[0]["uuid"]
+
+    def test_artifact_url_points_to_self(self, client: httpx.Client):
+        """Artifact format URL should point to pypi-tea's download endpoint, not PyPI CDN."""
+        a_uuid = self._get_artifact_uuid(client)
+        resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}")
+        assert resp.status_code == 200
+        artifact = resp.json()
+        url = artifact["formats"][0]["url"]
+        assert "/artifact/" in url
+        assert "/download" in url
+        assert "files.pythonhosted.org" not in url
+
+    def test_download_returns_sbom_content(self, client: httpx.Client):
+        """GET /artifact/{uuid}/download should return actual SBOM content."""
+        a_uuid = self._get_artifact_uuid(client)
+        resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}/download")
+        assert resp.status_code == 200
+        assert (
+            "cyclonedx" in resp.headers.get("content-type", "").lower()
+            or "json" in resp.headers.get("content-type", "").lower()
+        )
+        data = resp.json()
+        assert "bomFormat" in data or "spdxVersion" in data
+
+    def test_download_unknown_uuid_returns_404(self, client: httpx.Client):
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        resp = client.get(f"/v{settings.tea_spec_version}/artifact/{fake_uuid}/download")
+        assert resp.status_code == 404
