@@ -21,17 +21,12 @@ Python wheels can include SBOMs in `.dist-info/sboms/` ([PEP 770](https://peps.p
 
 ## Architecture
 
-```
-┌──────────┐     TEI/PURL      ┌───────────┐     JSON API     ┌─────────┐
-│  Client   │ ───────────────> │  pypi-tea  │ ──────────────> │  PyPI   │
-└──────────┘                   │  (FastAPI) │                  └─────────┘
-                               │            │   range request   ┌─────────┐
-                               │            │ ──────────────> │  Wheel  │
-                               │            │   (or full GET)   │  files  │
-                               │            │                   └─────────┘
-                               │            │
-                               │            │ <──────────────> │  Redis  │
-                               └───────────┘     caching       └─────────┘
+```mermaid
+graph LR
+    Client -->|TEI / PURL| App["pypi-tea<br/>(FastAPI)"]
+    App -->|JSON API| PyPI
+    App -->|Range request<br/>or full GET| Wheels["Wheel files"]
+    App <-->|Caching| Redis
 ```
 
 ### Caching
