@@ -29,25 +29,6 @@ jobs:
       - name: Install UV
         uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
 
-      - name: Generate SBOM (PEP 770)
-        uses: sbomify/sbomify-action@master
-        env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
-          API_BASE_URL: 'https://stage.sbomify.com'
-          COMPONENT_ID: 'GqOHskUyBcUR'
-          COMPONENT_NAME: 'pypi-tea'
-          LOCK_FILE: uv.lock
-          SBOM_FORMAT: cyclonedx
-          OUTPUT_FILE: pypi-tea.cdx.json
-          AUGMENT: "true"
-          ENRICH: "true"
-          UPLOAD: "true"
-
-      - name: Attest SBOM
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
-        with:
-          subject-path: '${{ github.workspace }}/pypi-tea.cdx.json'
-
       - name: Determine version
         id: version
         env:
@@ -65,6 +46,26 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
+
+      - name: Generate SBOM (PEP 770)
+        uses: sbomify/sbomify-action@master
+        env:
+          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
+          API_BASE_URL: 'https://stage.sbomify.com'
+          COMPONENT_ID: 'GqOHskUyBcUR'
+          COMPONENT_NAME: 'pypi-tea'
+          COMPONENT_VERSION: ${{ steps.version.outputs.version }}
+          LOCK_FILE: uv.lock
+          SBOM_FORMAT: cyclonedx
+          OUTPUT_FILE: pypi-tea.cdx.json
+          AUGMENT: "true"
+          ENRICH: "true"
+          UPLOAD: "true"
+
+      - name: Attest SBOM
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        with:
+          subject-path: '${{ github.workspace }}/pypi-tea.cdx.json'
 
       - name: Build wheel
         run: uv build
@@ -100,6 +101,7 @@ jobs:
           TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
           COMPONENT_ID: 'e0O7yCDijhp7'
           COMPONENT_NAME: 'pypi-tea'
+          COMPONENT_VERSION: ${{ github.event.release.tag_name }}
           LOCK_FILE: uv.lock
           SBOM_FORMAT: cyclonedx
           OUTPUT_FILE: pypi-tea.cdx.json
