@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = httpx.AsyncClient(
         timeout=30.0,
-        headers={"User-Agent": "pypi-tea/0.1.0 (https://github.com/sbomify/pypi-tea)"},
+        headers={"User-Agent": f"pypi-tea/{version('pypi-tea')} (https://github.com/sbomify/pypi-tea)"},
     )
     app.state.cache = Cache(settings.redis_url)
     await app.state.cache.init()
@@ -61,4 +62,5 @@ async def add_cache_headers(request: Request, call_next: Any) -> Response:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return (_STATIC_DIR / "index.html").read_text()
+    html = (_STATIC_DIR / "index.html").read_text()
+    return html.replace("{{VERSION}}", version("pypi-tea"))
