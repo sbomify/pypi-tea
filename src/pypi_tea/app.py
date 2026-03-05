@@ -45,6 +45,7 @@ _CACHE_RULES: dict[str, str] = {
     "/component": "public, max-age=86400, s-maxage=86400",
     "/product": "public, max-age=3600, s-maxage=3600",  # Shorter — new versions may appear
     "/discovery": "public, max-age=3600, s-maxage=3600",
+    "/.well-known/tea": "public, max-age=3600, s-maxage=3600",
     "/stats": "public, max-age=60, s-maxage=60",  # Stats change frequently
 }
 
