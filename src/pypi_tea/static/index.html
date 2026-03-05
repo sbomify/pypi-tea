@@ -53,7 +53,7 @@
 
       <!-- Time series charts -->
       <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
-        <h2 class="text-sm font-medium text-gray-400 mb-4">Cache Requests Over Time <span class="text-gray-600">(5-min buckets)</span></h2>
+        <h2 class="text-sm font-medium text-gray-400 mb-4">Cache Requests Over Time <span class="text-gray-600">(24h buckets)</span></h2>
         <canvas id="requests-time-chart" height="200"></canvas>
       </div>
 
@@ -66,6 +66,12 @@
           <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Discovery Over Time</h2>
           <canvas id="sbom-time-chart" height="220"></canvas>
         </div>
+      </div>
+
+      <!-- SBOM formats -->
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <h2 class="text-sm font-medium text-gray-400 mb-4">SBOM Formats</h2>
+        <div id="sbom-formats" class="text-gray-500">No format data yet</div>
       </div>
 
       <!-- Hit ratio bars -->
@@ -112,7 +118,7 @@
     const CHART_TICKS = { color: '#6b7280' };
     const TIME_SCALE = {
       type: 'time',
-      time: { tooltipFormat: 'HH:mm', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
+      time: { tooltipFormat: 'MMM d', unit: 'day', displayFormats: { day: 'MMM d' } },
       ticks: CHART_TICKS,
       grid: CHART_GRID,
     };
@@ -155,6 +161,30 @@
         renderRatioBar('PyPI Metadata', c.pypi_metadata.hits, c.pypi_metadata.misses) +
         renderRatioBar('SBOM Content', c.sbom_content.hits, c.sbom_content.misses) +
         renderRatioBar('Negative Cache', c.negative_cache.hits, c.negative_cache.misses);
+
+      // SBOM formats
+      const formats = data.sbom_formats || {};
+      const formatEntries = Object.entries(formats).sort((a, b) => b[1] - a[1]);
+      if (formatEntries.length > 0) {
+        const total = formatEntries.reduce((sum, [, v]) => sum + v, 0);
+        document.getElementById('sbom-formats').innerHTML = formatEntries.map(([name, count]) => {
+          const pctVal = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+          const isCDX = name.startsWith('CycloneDX');
+          const color = isCDX ? 'bg-blue-500' : 'bg-purple-500';
+          return `
+            <div class="mb-3">
+              <div class="flex justify-between text-sm mb-1">
+                <span class="text-gray-300">${name}</span>
+                <span class="text-gray-500">${count} (${pctVal}%)</span>
+              </div>
+              <div class="w-full bg-gray-800 rounded-full h-2">
+                <div class="${color} h-2 rounded-full transition-all duration-500" style="width: ${pctVal}%"></div>
+              </div>
+            </div>`;
+        }).join('');
+      } else {
+        document.getElementById('sbom-formats').innerHTML = '<span class="text-gray-500">No format data yet</span>';
+      }
 
       // Cache bar chart
       const cacheCtx = document.getElementById('cache-chart').getContext('2d');

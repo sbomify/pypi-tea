@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -74,6 +75,35 @@ async def _get_metadata_cached(client: httpx.AsyncClient, cache: Cache, package:
     return metadata
 
 
+def _detect_sbom_format(content: str, media_type: str) -> str | None:
+    """Detect SBOM format and version, returning e.g. 'CycloneDX/1.6' or 'SPDX/2.3'."""
+    if "cyclonedx" in media_type:
+        try:
+            data = json.loads(content)
+            version = data.get("specVersion", "unknown")
+            return f"CycloneDX/{version}"
+        except Exception:
+            return "CycloneDX/unknown"
+    if "spdx" in media_type:
+        try:
+            data = json.loads(content)
+            version = data.get("spdxVersion", "").removeprefix("SPDX-") or "unknown"
+            return f"SPDX/{version}"
+        except Exception:
+            return "SPDX/unknown"
+    # Try to detect from content for generic JSON
+    if media_type == "application/json":
+        try:
+            data = json.loads(content)
+            if "bomFormat" in data and data.get("bomFormat") == "CycloneDX":
+                return f"CycloneDX/{data.get('specVersion', 'unknown')}"
+            if "spdxVersion" in data:
+                return f"SPDX/{data['spdxVersion'].removeprefix('SPDX-')}"
+        except Exception:
+            pass
+    return None
+
+
 async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str, Any]]:
     if await cache.is_negative_cached(wheel.url):
         return []
@@ -86,6 +116,11 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
         return []
     result = [{"path": s.path, "content": s.content, "media_type": s.media_type} for s in sbom_files]
     await cache.set_sbom_content(wheel.url, result)
+    # Track SBOM formats
+    for sbom in sbom_files:
+        fmt = _detect_sbom_format(sbom.content, sbom.media_type)
+        if fmt:
+            await cache.incr_sbom_format(fmt)
     return result
 
 

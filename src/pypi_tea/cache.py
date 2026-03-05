@@ -10,8 +10,8 @@ NEGATIVE_TTL = 86400  # 24 hours
 
 STATS_KEY = "stats"
 STATS_BUCKET_PREFIX = "stats:ts:"
-STATS_BUCKET_SIZE = 300  # 5 minutes
-STATS_RETENTION = 86400  # 24 hours
+STATS_BUCKET_SIZE = 86400  # 24 hours
+STATS_RETENTION = 86400 * 30  # 30 days
 
 
 def _current_bucket() -> int:
@@ -68,8 +68,12 @@ class Cache:
         return json.loads(data)  # type: ignore[no-any-return]
 
     async def set_sbom_content(self, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
-        await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
-        await self._incr_stat("sbom:wheels_with_sbom")
+        is_new = await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL, nx=True)
+        if is_new:
+            await self._incr_stat("sbom:wheels_with_sbom")
+        else:
+            # Update the value and TTL even if key existed
+            await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
 
     # --- Negative cache ---
 
@@ -82,8 +86,18 @@ class Cache:
         return exists
 
     async def set_negative_cache(self, wheel_url: str) -> None:
-        await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL)
-        await self._incr_stat("sbom:wheels_without_sbom")
+        is_new = await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL, nx=True)
+        if is_new:
+            await self._incr_stat("sbom:wheels_without_sbom")
+        else:
+            # Refresh TTL even if key existed
+            await self._client.expire(f"neg:{wheel_url}", NEGATIVE_TTL)
+
+    # --- SBOM format tracking ---
+
+    async def incr_sbom_format(self, format_key: str) -> None:
+        """Track SBOM format occurrences. format_key e.g. 'CycloneDX/1.6', 'SPDX/2.3'."""
+        await self._incr_stat(f"sbom_format:{format_key}")
 
     # --- UUID lookup ---
 
@@ -156,6 +170,12 @@ class Cache:
         wheels_without = counters.get("sbom:wheels_without_sbom", 0)
         wheels_total = wheels_with + wheels_without
 
+        # Extract SBOM format counters
+        sbom_formats: dict[str, int] = {}
+        for key, val in counters.items():
+            if key.startswith("sbom_format:"):
+                sbom_formats[key.removeprefix("sbom_format:")] = val
+
         return {
             "cache": {
                 "pypi_metadata": {
@@ -180,6 +200,7 @@ class Cache:
                 "total_wheels_checked": wheels_total,
                 "sbom_percentage": round(wheels_with / wheels_total * 100, 2) if wheels_total else None,
             },
+            "sbom_formats": sbom_formats,
         }
 
     async def get_stats(self) -> dict[str, Any]:
