@@ -237,7 +237,7 @@ class Cache:
                 path_colon = sbom_id.find(":", after_scheme)
                 if path_colon > 0:
                     wheel_url = sbom_id[:path_colon]
-                    sbom_path = sbom_id[path_colon + 1:]
+                    sbom_path = sbom_id[path_colon + 1 :]
                 else:
                     wheel_url = sbom_id
                     sbom_path = ""
