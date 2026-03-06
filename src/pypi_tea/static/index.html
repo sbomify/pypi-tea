@@ -174,11 +174,21 @@ $ tea-cli inspect "urn:tei:purl:pypi.sbomify.com:pkg:pypi/cryptography@44.0.2"
 
 <span class="text-gray-500"># Search for a specific package version by PURL</span>
 $ tea-cli search-releases --id-type PURL \
-    --id-value "pkg:pypi/cryptography@44.0.2" --domain pypi.sbomify.com</code></pre>
+    --id-value "pkg:pypi/cryptography@44.0.2" --domain pypi.sbomify.com
+
+<span class="text-gray-500"># Filter by platform — only get SBOMs for Linux x86_64 wheels</span>
+$ tea-cli search-releases --id-type PURL \
+    --id-value "pkg:pypi/numpy@1.26.0?os=linux&amp;arch=x86_64" --domain pypi.sbomify.com</code></pre>
         </div>
         <p class="text-xs text-gray-600 mt-3">
           Also available as a <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Python library</a>:
           <code class="text-gray-400 bg-gray-950 px-1.5 py-0.5 rounded text-xs">from libtea import TeaClient</code>
+        </p>
+        <p class="text-xs text-gray-600 mt-2">
+          <strong class="text-gray-500">Platform filtering:</strong> Add <code class="text-gray-400 bg-gray-950 px-1.5 py-0.5 rounded text-xs">?os=linux&amp;arch=x86_64</code> qualifiers to a PURL to get SBOMs only for matching wheels.
+          Supported OS values: <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">linux</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">darwin</code>/<code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">macos</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">windows</code>.
+          Supported arch values: <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">x86_64</code>/<code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">amd64</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">aarch64</code>/<code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">arm64</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">i686</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">ppc64le</code>, <code class="text-gray-400 bg-gray-950 px-1 rounded text-xs">s390x</code>.
+          Pure-python wheels are always included.
         </p>
       </div>
 
