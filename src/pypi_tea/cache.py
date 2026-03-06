@@ -213,6 +213,60 @@ class Cache:
                 results.append({"uuid": uuid, **data})
         return results, total
 
+    async def get_invalid_sboms(self) -> list[dict[str, str]]:
+        """Return details of all SBOMs that failed validation."""
+        all_results: dict[str, str] = await self._client.hgetall(UNIQUE_SBOM_VALIDATION)  # type: ignore[misc]
+        invalid_ids = [sbom_id for sbom_id, result in all_results.items() if result == "invalid"]
+        if not invalid_ids:
+            return []
+
+        # sbom_id is "wheel_url:dist-info-path/sboms/filename"
+        # Extract package name from the wheel URL
+        results: list[dict[str, str]] = []
+        for sbom_id in sorted(invalid_ids):
+            # Split on first ".dist-info/sboms/" to separate wheel_url from sbom_path
+            parts = sbom_id.split(".dist-info/sboms/", 1)
+            wheel_url = parts[0] + ".dist-info/sboms/" + parts[1] if len(parts) == 2 else sbom_id
+            # The wheel_url portion before .dist-info contains the filename
+            # e.g. https://files.pythonhosted.org/.../maturin-1.8.1-cp39-...whl:maturin-1.8.1.dist-info/sboms/...
+            # Reconstruct: everything before the colon-separated path is the wheel URL
+            colon_idx = sbom_id.find(":")
+            if colon_idx > 0 and "://" in sbom_id[:colon_idx]:
+                # URL contains ://, find the next colon after the path
+                after_scheme = sbom_id.find("://") + 3
+                path_colon = sbom_id.find(":", after_scheme)
+                if path_colon > 0:
+                    wheel_url = sbom_id[:path_colon]
+                    sbom_path = sbom_id[path_colon + 1:]
+                else:
+                    wheel_url = sbom_id
+                    sbom_path = ""
+            else:
+                wheel_url = sbom_id
+                sbom_path = ""
+
+            # Extract package name from wheel filename in URL
+            filename = wheel_url.rsplit("/", 1)[-1] if "/" in wheel_url else wheel_url
+            # Wheel filename format: name-version-...whl
+            name_parts = filename.split("-")
+            package = name_parts[0] if name_parts else "unknown"
+            version = name_parts[1] if len(name_parts) > 1 else "unknown"
+
+            # Get format info
+            fmt: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
+
+            entry: dict[str, str] = {
+                "package": package,
+                "version": version,
+                "sbom_path": sbom_path,
+                "wheel_url": wheel_url,
+            }
+            if fmt:
+                entry["format"] = fmt
+            results.append(entry)
+
+        return results
+
     # --- Statistics ---
 
     @staticmethod
