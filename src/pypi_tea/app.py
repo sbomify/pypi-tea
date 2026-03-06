@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -14,7 +15,7 @@ from pypi_tea.config import settings
 from pypi_tea.routes import artifacts, component_releases, components, discovery, product_releases, products, stats
 
 sentry_sdk.init(
-    dsn="https://3d9ae0e16fde020ec701baa328de83ce@sentry.vikpire.com/10",
+    dsn=os.environ.get("SENTRY_DSN", ""),
     send_default_pii=True,
     traces_sample_rate=0.1,
     release=version("pypi-tea"),
