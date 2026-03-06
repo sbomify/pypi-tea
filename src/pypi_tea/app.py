@@ -5,11 +5,20 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import sentry_sdk
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        send_default_pii=True,
+        traces_sample_rate=0.1,
+        release=version("pypi-tea"),
+    )
 from pypi_tea.routes import artifacts, component_releases, components, discovery, product_releases, products, stats
 
 _STATIC_DIR = Path(__file__).parent / "static"
