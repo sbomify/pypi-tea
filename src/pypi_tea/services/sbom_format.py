@@ -61,7 +61,7 @@ def _detect_json(content: str) -> tuple[str | None, str | None]:
 
     try:
         data = json.loads(content)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError, ValueError:
         return None, None
 
     if not isinstance(data, dict):
