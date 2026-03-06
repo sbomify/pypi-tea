@@ -79,6 +79,10 @@ _CACHE_RULES: dict[str, str] = {
 }
 
 
+# TEA endpoint prefixes to track (after stripping version prefix)
+_TEA_ENDPOINTS = ("/discovery", "/products", "/product", "/componentRelease", "/component", "/artifact")
+
+
 @app.middleware("http")
 async def add_cache_headers(request: Request, call_next: Any) -> Response:
     response: Response = await call_next(request)
@@ -90,6 +94,14 @@ async def add_cache_headers(request: Request, call_next: Any) -> Response:
         if path.startswith(prefix):
             response.headers["Cache-Control"] = header
             break
+    # Track TEA endpoint usage
+    if response.status_code < 400:
+        for ep in _TEA_ENDPOINTS:
+            if path.startswith(ep):
+                cache = getattr(request.app.state, "cache", None)
+                if cache:
+                    await cache.track_endpoint(ep.lstrip("/"))
+                break
     return response
 
 

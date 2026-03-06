@@ -223,6 +223,7 @@ async def resolve_purl(
             sboms_by_wheel[wheel.url] = sboms
     await _store_uuid_lookups(cache, name, version, all_wheels, sboms_by_wheel)
     await cache.track_package_query(name, version, has_sbom=bool(sboms_by_wheel))
+    await cache.track_query(name, version, qualifiers.os_name, qualifiers.arch, has_sbom=bool(sboms_by_wheel))
     return name, version, metadata, wheels, sboms_by_wheel
 
 

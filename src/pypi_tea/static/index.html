@@ -130,6 +130,79 @@
         <canvas id="sbom-time-chart" height="200"></canvas>
       </div>
 
+      <!-- Usage stats -->
+      <div id="usage-section" class="hidden">
+        <h2 class="text-lg font-semibold text-gray-300 mb-4 mt-2">Usage</h2>
+
+        <!-- Usage summary cards -->
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+          <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wide">Total Queries</div>
+            <div id="usage-total-queries" class="text-2xl font-semibold mt-1">-</div>
+          </div>
+          <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wide">With Platform Filters</div>
+            <div id="usage-qualifier-queries" class="text-2xl font-semibold mt-1">-</div>
+            <div class="text-xs text-gray-600 mt-1">Queries using os/arch qualifiers</div>
+          </div>
+          <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+            <div class="text-xs text-gray-500 uppercase tracking-wide">Unique Packages Queried</div>
+            <div id="usage-unique-packages" class="text-2xl font-semibold mt-1">-</div>
+          </div>
+        </div>
+
+        <!-- Daily queries chart -->
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+          <h2 class="text-sm font-medium text-gray-400 mb-4">Queries Per Day</h2>
+          <canvas id="usage-daily-chart" height="200"></canvas>
+        </div>
+
+        <!-- Top packages + endpoints row -->
+        <div class="grid md:grid-cols-2 gap-6 mb-6">
+          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <h2 class="text-sm font-medium text-gray-400 mb-4">Top Packages Queried</h2>
+            <div id="usage-top-packages" class="space-y-1 text-sm"></div>
+          </div>
+          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <h2 class="text-sm font-medium text-gray-400 mb-4">Endpoint Hits</h2>
+            <div id="usage-endpoints" class="space-y-1 text-sm"></div>
+          </div>
+        </div>
+
+        <!-- Qualifiers row -->
+        <div class="grid md:grid-cols-2 gap-6 mb-6">
+          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <h2 class="text-sm font-medium text-gray-400 mb-4">OS Qualifiers Used</h2>
+            <div id="usage-os-qualifiers" class="space-y-1 text-sm"></div>
+            <div id="usage-os-empty" class="hidden text-gray-600 text-sm">No qualifier usage yet</div>
+          </div>
+          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <h2 class="text-sm font-medium text-gray-400 mb-4">Arch Qualifiers Used</h2>
+            <div id="usage-arch-qualifiers" class="space-y-1 text-sm"></div>
+            <div id="usage-arch-empty" class="hidden text-gray-600 text-sm">No qualifier usage yet</div>
+          </div>
+        </div>
+
+        <!-- Recent queries -->
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+          <h2 class="text-sm font-medium text-gray-400 mb-4">Recent Queries</h2>
+          <div id="usage-recent" class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="text-xs text-gray-500 uppercase border-b border-gray-800">
+                <tr>
+                  <th class="py-2 pr-4">Package</th>
+                  <th class="py-2 pr-4">Version</th>
+                  <th class="py-2 pr-4">Platform</th>
+                  <th class="py-2 pr-4">SBOM</th>
+                  <th class="py-2">Time</th>
+                </tr>
+              </thead>
+              <tbody id="usage-recent-body" class="text-gray-300"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Wheel-level detail -->
       <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
         <h2 class="text-sm font-medium text-gray-400 mb-2">Wheel-Level Breakdown</h2>
@@ -221,6 +294,7 @@ $ tea-cli search-releases --id-type PURL \
     let encodingChart = null;
     let packagesTimeChart = null;
     let sbomTimeChart = null;
+    let usageDailyChart = null;
 
     const COLORS = {
       green: 'rgb(34, 197, 94)',
@@ -539,15 +613,113 @@ $ tea-cli search-releases --id-type PURL \
       });
     }
 
+    function renderBarList(containerId, entries, colorFn) {
+      const el = document.getElementById(containerId);
+      if (!entries.length) { el.innerHTML = '<span class="text-gray-600">No data yet</span>'; return; }
+      const max = entries[0][1];
+      el.innerHTML = entries.map(([label, count]) => {
+        const pct = max > 0 ? (count / max * 100) : 0;
+        const color = colorFn ? colorFn(label) : 'bg-blue-500';
+        return `<div class="flex items-center gap-3">
+          <div class="w-32 truncate text-gray-400 text-xs" title="${label}">${label}</div>
+          <div class="flex-1 bg-gray-800 rounded-full h-2"><div class="${color} h-2 rounded-full" style="width:${pct}%"></div></div>
+          <div class="text-xs text-gray-500 w-12 text-right">${count.toLocaleString()}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderUsage(usage) {
+      document.getElementById('usage-section').classList.remove('hidden');
+
+      document.getElementById('usage-total-queries').textContent = usage.total_queries.toLocaleString();
+      document.getElementById('usage-qualifier-queries').textContent = usage.qualifier_queries.toLocaleString();
+      document.getElementById('usage-unique-packages').textContent = usage.top_packages.length.toLocaleString();
+
+      // Top packages
+      const pkgEntries = usage.top_packages.map(p => [p.package, p.queries]);
+      renderBarList('usage-top-packages', pkgEntries, () => 'bg-blue-500');
+
+      // Endpoints
+      const epEntries = Object.entries(usage.endpoints).sort((a, b) => b[1] - a[1]);
+      renderBarList('usage-endpoints', epEntries, () => 'bg-indigo-500');
+
+      // OS qualifiers
+      const osEntries = Object.entries(usage.qualifiers.os).sort((a, b) => b[1] - a[1]);
+      if (osEntries.length) {
+        document.getElementById('usage-os-empty').classList.add('hidden');
+        renderBarList('usage-os-qualifiers', osEntries, () => 'bg-teal-500');
+      } else {
+        document.getElementById('usage-os-qualifiers').innerHTML = '';
+        document.getElementById('usage-os-empty').classList.remove('hidden');
+      }
+
+      // Arch qualifiers
+      const archEntries = Object.entries(usage.qualifiers.arch).sort((a, b) => b[1] - a[1]);
+      if (archEntries.length) {
+        document.getElementById('usage-arch-empty').classList.add('hidden');
+        renderBarList('usage-arch-qualifiers', archEntries, () => 'bg-purple-500');
+      } else {
+        document.getElementById('usage-arch-qualifiers').innerHTML = '';
+        document.getElementById('usage-arch-empty').classList.remove('hidden');
+      }
+
+      // Daily queries chart
+      if (usage.daily_queries.length) {
+        const labels = usage.daily_queries.map(d => new Date(d.timestamp * 1000));
+        const data = usage.daily_queries.map(d => d.queries);
+        const ctx = document.getElementById('usage-daily-chart').getContext('2d');
+        if (usageDailyChart) usageDailyChart.destroy();
+        usageDailyChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{ label: 'Queries', data, backgroundColor: COLORS.amber, borderRadius: 3 }],
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+            scales: { x: TIME_SCALE, y: { beginAtZero: true, ticks: CHART_TICKS, grid: CHART_GRID } },
+          },
+        });
+      }
+
+      // Recent queries table
+      const tbody = document.getElementById('usage-recent-body');
+      tbody.innerHTML = usage.recent.map(q => {
+        const platform = [q.os, q.arch].filter(Boolean).join('/') || '-';
+        const sbomBadge = q.has_sbom
+          ? '<span class="text-green-400">yes</span>'
+          : '<span class="text-gray-500">no</span>';
+        const ago = formatTimeAgo(q.ts);
+        return `<tr class="border-b border-gray-800/50">
+          <td class="py-1.5 pr-4 font-mono text-xs">${q.package}</td>
+          <td class="py-1.5 pr-4 text-gray-400">${q.version}</td>
+          <td class="py-1.5 pr-4 text-gray-400">${platform}</td>
+          <td class="py-1.5 pr-4">${sbomBadge}</td>
+          <td class="py-1.5 text-gray-500 text-xs">${ago}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function formatTimeAgo(ts) {
+      const seconds = Math.floor(Date.now() / 1000 - ts);
+      if (seconds < 60) return 'just now';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+      return Math.floor(seconds / 86400) + 'd ago';
+    }
+
     async function refreshAll() {
       try {
-        const [statsResp, tsResp] = await Promise.all([
+        const [statsResp, tsResp, usageResp] = await Promise.all([
           fetch('/stats'),
           fetch('/stats/timeseries'),
+          fetch('/stats/usage'),
         ]);
         if (!statsResp.ok) throw new Error(`HTTP ${statsResp.status}`);
         if (!tsResp.ok) throw new Error(`HTTP ${tsResp.status}`);
-        const [stats, timeseries] = await Promise.all([statsResp.json(), tsResp.json()]);
+        if (!usageResp.ok) throw new Error(`HTTP ${usageResp.status}`);
+        const [stats, timeseries, usage] = await Promise.all([statsResp.json(), tsResp.json(), usageResp.json()]);
 
         document.getElementById('loading').classList.add('hidden');
         document.getElementById('error').classList.add('hidden');
@@ -555,6 +727,7 @@ $ tea-cli search-releases --id-type PURL \
 
         renderSummary(stats);
         renderTimeSeries(timeseries);
+        renderUsage(usage);
       } catch (err) {
         document.getElementById('loading').classList.add('hidden');
         document.getElementById('error').classList.remove('hidden');
