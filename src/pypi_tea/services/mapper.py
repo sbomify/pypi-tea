@@ -47,7 +47,7 @@ logger = logging.getLogger("pypi_tea.mapper")
 
 @dataclass(frozen=True)
 class PurlQualifiers:
-    os: str | None = None
+    os_name: str | None = None
     arch: str | None = None
 
 
@@ -59,7 +59,7 @@ def parse_purl(purl_str: str) -> tuple[str, str | None, PurlQualifiers]:
     return (
         purl.name.lower(),
         purl.version,
-        PurlQualifiers(os=qualifiers.get("os"), arch=qualifiers.get("arch")),
+        PurlQualifiers(os_name=qualifiers.get("os"), arch=qualifiers.get("arch")),
     )
 
 
@@ -215,7 +215,7 @@ async def resolve_purl(
         raise ValueError("PURL must include a version (e.g. pkg:pypi/requests@2.31.0)")
     metadata = await _get_metadata_cached(client, cache, name, version)
     all_wheels = extract_wheel_urls(metadata)
-    wheels = filter_wheels_by_platform(all_wheels, qualifiers.os, qualifiers.arch)
+    wheels = filter_wheels_by_platform(all_wheels, qualifiers.os_name, qualifiers.arch)
     sboms_by_wheel: dict[str, list[dict[str, Any]]] = {}
     for wheel in wheels:
         sboms = await _get_sboms_for_wheel(cache, wheel)

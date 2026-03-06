@@ -112,18 +112,29 @@ def test_pure_python_always_included():
     assert len(result) == 1
 
 
+def test_unparseable_filename_included_as_fallback():
+    wheels = [
+        WheelInfo(filename="weird-package.whl", url="https://example.com/weird.whl", digests={}, size=100),
+        WHEELS[0],  # linux x86_64
+    ]
+    result = filter_wheels_by_platform(wheels, os_filter="windows")
+    filenames = [w.filename for w in result]
+    assert "weird-package.whl" in filenames
+    assert len(result) == 1  # only the unparseable one, not linux
+
+
 def test_parse_purl_without_qualifiers():
     name, version, qualifiers = parse_purl("pkg:pypi/requests@2.31.0")
     assert name == "requests"
     assert version == "2.31.0"
-    assert qualifiers == PurlQualifiers(os=None, arch=None)
+    assert qualifiers == PurlQualifiers(os_name=None, arch=None)
 
 
 def test_parse_purl_with_os_qualifier():
     name, version, qualifiers = parse_purl("pkg:pypi/numpy@1.26.0?os=linux")
     assert name == "numpy"
     assert version == "1.26.0"
-    assert qualifiers.os == "linux"
+    assert qualifiers.os_name == "linux"
     assert qualifiers.arch is None
 
 
@@ -131,5 +142,5 @@ def test_parse_purl_with_both_qualifiers():
     name, version, qualifiers = parse_purl("pkg:pypi/numpy@1.26.0?os=linux&arch=x86_64")
     assert name == "numpy"
     assert version == "1.26.0"
-    assert qualifiers.os == "linux"
+    assert qualifiers.os_name == "linux"
     assert qualifiers.arch == "x86_64"

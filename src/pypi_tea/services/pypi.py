@@ -1,13 +1,10 @@
-import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from packaging.utils import parse_wheel_filename
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from pypi_tea.config import settings
-
-logger = logging.getLogger("pypi_tea.pypi")
 
 
 @dataclass
@@ -39,8 +36,8 @@ ARCH_TAG_MAP: dict[str, list[str]] = {
     "amd64": ["x86_64", "amd64"],
     "aarch64": ["aarch64", "arm64"],
     "arm64": ["aarch64", "arm64"],
-    "i686": ["i686", "x86"],
-    "x86": ["i686", "x86"],
+    "i686": ["i686"],
+    "x86": ["i686"],
     "ppc64le": ["ppc64le"],
     "s390x": ["s390x"],
     "universal2": ["universal2"],
@@ -60,7 +57,7 @@ def filter_wheels_by_platform(
     for wheel in wheels:
         try:
             _, _, _, tags = parse_wheel_filename(wheel.filename)
-        except Exception:
+        except InvalidWheelFilename:
             result.append(wheel)
             continue
 
