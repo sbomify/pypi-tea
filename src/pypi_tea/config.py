@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     pypi_base_url: str = "https://pypi.org"
     tea_spec_version: str = "0.3.0-beta.2"
     server_root_url: str = "http://localhost:8000"
-    sentry_dsn: str = ""
 
     model_config = {"env_prefix": "PYPI_TEA_"}
 
