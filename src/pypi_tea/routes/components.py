@@ -9,8 +9,8 @@ from libtea.models import ErrorResponse, ErrorType
 from pypi_tea.cache import Cache
 from pypi_tea.deps import get_cache, get_http_client
 from pypi_tea.serialization import tea_dump
-from pypi_tea.services.mapper import _build_component, _build_release_for_component
-from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
+from pypi_tea.services.mapper import _build_component, _build_release_for_component, _get_metadata_cached
+from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls
 from pypi_tea.services.uuids import component_release_uuid
 
 router = APIRouter()
@@ -57,7 +57,7 @@ async def get_component_releases(
     if not cr_lookup:
         return []
 
-    metadata = await get_version_metadata(client, cr_lookup["name"], cr_lookup["version"])
+    metadata = await _get_metadata_cached(client, cache, cr_lookup["name"], cr_lookup["version"])
     wheels = extract_wheel_urls(metadata)
     matching_wheel = next((w for w in wheels if w.filename == wheel.filename), None)
     if not matching_wheel:

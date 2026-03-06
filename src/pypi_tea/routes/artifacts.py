@@ -7,8 +7,8 @@ from libtea.models import ErrorResponse, ErrorType
 
 from pypi_tea.cache import Cache
 from pypi_tea.deps import get_cache, get_http_client
-from pypi_tea.services.mapper import _build_artifact
-from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
+from pypi_tea.services.mapper import _build_artifact, _get_metadata_cached
+from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls
 from pypi_tea.services.sbom_extractor import extract_sboms
 
 router = APIRouter()
@@ -37,7 +37,7 @@ async def get_artifact(
     sbom_path = lookup["sbom_path"]
 
     # Rebuild the WheelInfo (we just need the url for the artifact)
-    metadata = await get_version_metadata(client, lookup["name"], lookup["version"])
+    metadata = await _get_metadata_cached(client, cache, lookup["name"], lookup["version"])
     wheels = extract_wheel_urls(metadata)
     matching_wheel = next((w for w in wheels if w.url == wheel_url), None)
     if not matching_wheel:

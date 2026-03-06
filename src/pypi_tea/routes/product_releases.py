@@ -11,12 +11,13 @@ from pypi_tea.cache import Cache
 from pypi_tea.deps import get_cache, get_http_client
 from pypi_tea.serialization import tea_dump
 from pypi_tea.services.mapper import (
+    _get_metadata_cached,
     _get_sboms_for_wheel,
     build_collection_for_product_release,
     build_product_release,
     resolve_purl,
 )
-from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
+from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls
 
 router = APIRouter()
 
@@ -58,7 +59,7 @@ async def list_or_search_product_releases(
     entries, total = await cache.list_by_entity_type("product_release", pageOffset, pageSize)
     releases = []
     for entry in entries:
-        metadata = await get_version_metadata(client, entry["name"], entry["version"])
+        metadata = await _get_metadata_cached(client, cache, entry["name"], entry["version"])
         wheels = extract_wheel_urls(metadata)
         entry_sboms: dict[str, list[dict[str, Any]]] = {}
         for wheel in wheels:
@@ -83,7 +84,7 @@ async def _resolve_product_release(
     if not lookup or lookup["entity_type"] != "product_release":
         return None
     name, version = lookup["name"], lookup["version"]
-    metadata = await get_version_metadata(client, name, version)
+    metadata = await _get_metadata_cached(client, cache, name, version)
     wheels = extract_wheel_urls(metadata)
     sboms_by_wheel: dict[str, list[dict[str, Any]]] = {}
     for wheel in wheels:
