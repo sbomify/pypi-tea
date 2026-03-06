@@ -1,5 +1,6 @@
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,7 +31,7 @@ from packageurl import PackageURL
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
-from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, get_version_metadata
+from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, filter_wheels_by_platform, get_version_metadata
 from pypi_tea.services.sbom_extractor import extract_sboms
 from pypi_tea.services.sbom_format import detect_sbom_format, validate_sbom
 from pypi_tea.services.uuids import (
@@ -44,11 +45,22 @@ from pypi_tea.services.uuids import (
 logger = logging.getLogger("pypi_tea.mapper")
 
 
-def parse_purl(purl_str: str) -> tuple[str, str | None]:
+@dataclass(frozen=True)
+class PurlQualifiers:
+    os: str | None = None
+    arch: str | None = None
+
+
+def parse_purl(purl_str: str) -> tuple[str, str | None, PurlQualifiers]:
     purl = PackageURL.from_string(purl_str)
     if purl.type != "pypi":
         raise ValueError(f"Only PyPI PURLs are supported, got: {purl.type}")
-    return purl.name.lower(), purl.version
+    qualifiers = purl.qualifiers or {}
+    return (
+        purl.name.lower(),
+        purl.version,
+        PurlQualifiers(os=qualifiers.get("os"), arch=qualifiers.get("arch")),
+    )
 
 
 def _make_checksums(digests: dict[str, str]) -> tuple[Checksum, ...]:
@@ -198,17 +210,18 @@ async def _store_uuid_lookups(
 async def resolve_purl(
     client: httpx.AsyncClient, cache: Cache, purl_str: str
 ) -> tuple[str, str, dict[str, Any], list[WheelInfo], dict[str, list[dict[str, Any]]]]:
-    name, version = parse_purl(purl_str)
+    name, version, qualifiers = parse_purl(purl_str)
     if not version:
         raise ValueError("PURL must include a version (e.g. pkg:pypi/requests@2.31.0)")
     metadata = await _get_metadata_cached(client, cache, name, version)
-    wheels = extract_wheel_urls(metadata)
+    all_wheels = extract_wheel_urls(metadata)
+    wheels = filter_wheels_by_platform(all_wheels, qualifiers.os, qualifiers.arch)
     sboms_by_wheel: dict[str, list[dict[str, Any]]] = {}
     for wheel in wheels:
         sboms = await _get_sboms_for_wheel(cache, wheel)
         if sboms:
             sboms_by_wheel[wheel.url] = sboms
-    await _store_uuid_lookups(cache, name, version, wheels, sboms_by_wheel)
+    await _store_uuid_lookups(cache, name, version, all_wheels, sboms_by_wheel)
     await cache.track_package_query(name, version, has_sbom=bool(sboms_by_wheel))
     return name, version, metadata, wheels, sboms_by_wheel
 
