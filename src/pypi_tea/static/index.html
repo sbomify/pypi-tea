@@ -172,13 +172,9 @@ $ pip install libtea[cli]
 <span class="text-gray-500"># Inspect a PyPI package — discovers SBOMs via TEA in one shot</span>
 $ tea-cli inspect "urn:tei:purl:pypi.sbomify.com:pkg:pypi/maturin@1.8.1"
 
-<span class="text-gray-500"># Search for a package by PURL</span>
-$ tea-cli search-releases --id-type PURL --id-value "pkg:pypi/maturin" \
-    --domain pypi.sbomify.com
-
-<span class="text-gray-500"># Download an SBOM with checksum verification</span>
-$ tea-cli download &lt;artifact-url&gt; ./sbom.json \
-    --checksum "SHA-256:abc123..." --domain pypi.sbomify.com</code></pre>
+<span class="text-gray-500"># Search for a specific package version by PURL</span>
+$ tea-cli search-releases --id-type PURL \
+    --id-value "pkg:pypi/maturin@1.8.1" --domain pypi.sbomify.com</code></pre>
         </div>
         <p class="text-xs text-gray-600 mt-3">
           Also available as a <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Python library</a>:
