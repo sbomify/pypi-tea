@@ -43,16 +43,20 @@ async def get_artifact(
     if not matching_wheel:
         matching_wheel = WheelInfo(filename=sbom_path.split("/")[0], url=wheel_url, digests={}, size=None)
 
-    # Try to get the real media_type from cached SBOM content
+    # Try to get the real media_type and sha256 from cached SBOM content
     media_type = "application/octet-stream"
+    sha256 = None
     cached_sboms = await cache.get_sbom_content(wheel_url)
     if cached_sboms:
         for s in cached_sboms:
             if s["path"] == sbom_path:
                 media_type = s.get("media_type", media_type)
+                sha256 = s.get("sha256")
                 break
 
-    sbom = {"path": sbom_path, "content": "", "media_type": media_type}
+    sbom: dict[str, Any] = {"path": sbom_path, "content": "", "media_type": media_type}
+    if sha256:
+        sbom["sha256"] = sha256
     artifact = _build_artifact(matching_wheel, sbom)
     return artifact.model_dump(by_alias=True)
 
