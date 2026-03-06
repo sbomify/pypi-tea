@@ -3,10 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>pypi-tea Dashboard</title>
+  <title>pypi-tea — SBOM Coverage Dashboard for PyPI Packages</title>
+  <meta name="description" content="Live dashboard tracking SBOM (Software Bill of Materials) adoption across PyPI packages. See which Python packages ship CycloneDX or SPDX SBOMs in their wheels.">
+  <meta name="keywords" content="SBOM, PyPI, CycloneDX, SPDX, Software Bill of Materials, Python, supply chain security, TEA, Transparency Exchange API">
+  <link rel="canonical" href="https://pypi.sbomify.com/">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="pypi-tea — SBOM Coverage for PyPI Packages">
+  <meta property="og:description" content="Live dashboard tracking SBOM adoption across the top PyPI packages. Powered by the Transparency Exchange API.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pypi.sbomify.com/">
+  <meta property="og:site_name" content="pypi-tea">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="pypi-tea — SBOM Coverage for PyPI Packages">
+  <meta name="twitter:description" content="Live dashboard tracking SBOM adoption across the top PyPI packages. Powered by the Transparency Exchange API.">
+
+  <meta name="robots" content="index, follow">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "pypi-tea",
+    "description": "SBOM coverage dashboard for PyPI packages, powered by the Transparency Exchange API (TEA)",
+    "url": "https://pypi.sbomify.com/",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "author": {
+      "@type": "Organization",
+      "name": "sbomify",
+      "url": "https://sbomify.com"
+    }
+  }
+  </script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
   <div class="max-w-6xl mx-auto px-6 py-10">

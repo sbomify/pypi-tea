@@ -85,6 +85,9 @@ async def add_cache_headers(request: Request, call_next: Any) -> Response:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index() -> str:
+async def index() -> HTMLResponse:
     html = (_STATIC_DIR / "index.html").read_text()
-    return html.replace("{{VERSION}}", version("pypi-tea"))
+    return HTMLResponse(
+        content=html.replace("{{VERSION}}", version("pypi-tea")),
+        headers={"Cache-Control": "public, max-age=300, s-maxage=300"},
+    )
