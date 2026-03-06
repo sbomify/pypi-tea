@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -11,15 +12,14 @@ from fastapi.responses import HTMLResponse
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
-
-if settings.sentry_dsn:
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn,
-        send_default_pii=True,
-        traces_sample_rate=0.1,
-        release=version("pypi-tea"),
-    )
 from pypi_tea.routes import artifacts, component_releases, components, discovery, product_releases, products, stats
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN", ""),
+    send_default_pii=True,
+    traces_sample_rate=0.1,
+    release=version("pypi-tea"),
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
