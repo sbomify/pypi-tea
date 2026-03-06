@@ -26,6 +26,16 @@ UNIQUE_SBOM_ENCODINGS = "unique:sbom_encodings"
 DAILY_PACKAGES_PREFIX = "daily:packages:"
 DAILY_PACKAGES_WITH_SBOM_PREFIX = "daily:packages_with_sbom:"
 
+# Usage tracking
+USAGE_TOP_PACKAGES = "usage:top_packages"
+USAGE_QUALIFIERS_OS = "usage:qualifiers:os"
+USAGE_QUALIFIERS_ARCH = "usage:qualifiers:arch"
+USAGE_ENDPOINTS = "usage:endpoints"
+USAGE_RECENT = "usage:recent"
+USAGE_RECENT_MAX = 100
+USAGE_DAILY_QUERIES_PREFIX = "usage:daily_queries:"
+USAGE_QUALIFIER_QUERIES = "usage:qualifier_query_count"
+
 
 def _current_bucket() -> int:
     return int(time.time()) // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
@@ -266,6 +276,100 @@ class Cache:
             results.append(entry)
 
         return results
+
+    # --- Usage tracking ---
+
+    async def track_query(
+        self,
+        package: str,
+        version: str,
+        os_filter: str | None,
+        arch_filter: str | None,
+        has_sbom: bool,
+    ) -> None:
+        bucket = _current_bucket()
+        daily_key = f"{USAGE_DAILY_QUERIES_PREFIX}{bucket}"
+        entry = json.dumps(
+            {
+                "package": package,
+                "version": version,
+                "os": os_filter,
+                "arch": arch_filter,
+                "has_sbom": has_sbom,
+                "ts": int(time.time()),
+            }
+        )
+        pipe = self._client.pipeline()
+        pipe.zincrby(USAGE_TOP_PACKAGES, 1, f"{package}@{version}")
+        if os_filter:
+            pipe.zincrby(USAGE_QUALIFIERS_OS, 1, os_filter)
+            pipe.hincrby(STATS_KEY, USAGE_QUALIFIER_QUERIES, 1)
+        if arch_filter:
+            pipe.zincrby(USAGE_QUALIFIERS_ARCH, 1, arch_filter)
+            if not os_filter:
+                pipe.hincrby(STATS_KEY, USAGE_QUALIFIER_QUERIES, 1)
+        pipe.lpush(USAGE_RECENT, entry)
+        pipe.ltrim(USAGE_RECENT, 0, USAGE_RECENT_MAX - 1)
+        pipe.incr(daily_key)
+        pipe.expire(daily_key, STATS_RETENTION)
+        await pipe.execute()
+
+    async def track_endpoint(self, endpoint: str) -> None:
+        await self._client.zincrby(USAGE_ENDPOINTS, 1, endpoint)
+
+    async def get_usage_stats(self) -> dict[str, Any]:
+        pipe = self._client.pipeline()
+        pipe.zrevrange(USAGE_TOP_PACKAGES, 0, 19, withscores=True)
+        pipe.zrevrange(USAGE_QUALIFIERS_OS, 0, 9, withscores=True)
+        pipe.zrevrange(USAGE_QUALIFIERS_ARCH, 0, 9, withscores=True)
+        pipe.zrevrange(USAGE_ENDPOINTS, 0, 19, withscores=True)
+        pipe.lrange(USAGE_RECENT, 0, USAGE_RECENT_MAX - 1)
+        pipe.hget(STATS_KEY, USAGE_QUALIFIER_QUERIES)
+        results = await pipe.execute()
+
+        top_packages = [{"package": name, "queries": int(score)} for name, score in results[0]]
+        qualifier_os = {name: int(score) for name, score in results[1]}
+        qualifier_arch = {name: int(score) for name, score in results[2]}
+        endpoints = {name: int(score) for name, score in results[3]}
+        recent = [json.loads(entry) for entry in results[4]]
+        qualifier_query_count = int(results[5] or 0)
+
+        # Daily query time series
+        now = int(time.time())
+        oldest = now - STATS_RETENTION
+        oldest_bucket = oldest // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
+        current = _current_bucket()
+        bucket_times: list[int] = []
+        t = oldest_bucket
+        while t <= current:
+            bucket_times.append(t)
+            t += STATS_BUCKET_SIZE
+
+        daily_series: list[dict[str, Any]] = []
+        if bucket_times:
+            daily_pipe = self._client.pipeline()
+            for bt in bucket_times:
+                daily_pipe.get(f"{USAGE_DAILY_QUERIES_PREFIX}{bt}")
+            daily_results = await daily_pipe.execute()
+            for bt, count_raw in zip(bucket_times, daily_results, strict=True):
+                count = int(count_raw) if count_raw else 0
+                if count > 0:
+                    daily_series.append({"timestamp": bt, "queries": count})
+
+        total_queries = sum(int(score) for _, score in results[0]) if results[0] else 0
+
+        return {
+            "total_queries": total_queries,
+            "qualifier_queries": qualifier_query_count,
+            "top_packages": top_packages,
+            "qualifiers": {
+                "os": qualifier_os,
+                "arch": qualifier_arch,
+            },
+            "endpoints": endpoints,
+            "recent": recent,
+            "daily_queries": daily_series,
+        }
 
     # --- Statistics ---
 

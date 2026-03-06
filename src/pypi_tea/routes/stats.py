@@ -22,6 +22,13 @@ async def get_stats_timeseries(
     return await cache.get_stats_timeseries()
 
 
+@router.get("/stats/usage")
+async def get_usage_stats(
+    cache: Cache = Depends(get_cache),
+) -> Any:
+    return await cache.get_usage_stats()
+
+
 @router.get("/stats/invalid-sboms")
 async def get_invalid_sboms(
     cache: Cache = Depends(get_cache),

@@ -46,7 +46,7 @@ async def list_or_search_products(
             from pypi_tea.services.mapper import parse_purl
 
             try:
-                purl_name, _ = parse_purl(idValue)
+                purl_name, _, _ = parse_purl(idValue)
                 entries = await cache.find_by_entity_type_and_field("product", "name", purl_name)
                 if entries:
                     products = [_build_product(e["name"], None) for e in entries]
