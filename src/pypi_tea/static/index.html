@@ -39,7 +39,15 @@
       "url": "https://sbomify.com"
     },
     "codeRepository": "https://github.com/sbomify/pypi-tea",
-    "license": "https://opensource.org/licenses/Apache-2.0"
+    "license": "https://opensource.org/licenses/Apache-2.0",
+    "softwareRequirements": {
+      "@type": "SoftwareApplication",
+      "name": "libtea",
+      "description": "Python client library for the Transparency Exchange API (TEA)",
+      "url": "https://pypi.org/project/libtea/",
+      "codeRepository": "https://github.com/sbomify/py-libtea",
+      "applicationCategory": "DeveloperApplication"
+    }
   }
   </script>
 </head>
@@ -146,6 +154,32 @@
           </div>
           <div class="text-xs text-gray-500 mt-1 text-right"><span id="wheels-pct">-</span> of wheels include an SBOM</div>
         </div>
+      </div>
+
+      <!-- How to use TEA -->
+      <div class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-6">
+        <h2 class="text-sm font-medium text-gray-400 mb-2">How to use TEA</h2>
+        <p class="text-xs text-gray-600 mb-4">
+          The <a href="https://github.com/CycloneDX/transparency-exchange-api" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Transparency Exchange API (TEA)</a>
+          is an open standard for discovering SBOMs. You can query this server using
+          <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">tea-cli</a>:
+        </p>
+        <div class="relative">
+          <button onclick="copyCode()" class="absolute top-2 right-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400 border border-gray-700 transition-colors cursor-pointer" aria-label="Copy code">Copy</button>
+          <pre class="bg-gray-950 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed border border-gray-800"><code id="tea-example" class="text-gray-300"><span class="text-gray-500"># Install the TEA CLI</span>
+$ pip install libtea[cli]
+
+<span class="text-gray-500"># Inspect a PyPI package — discovers SBOMs via TEA in one shot</span>
+$ tea-cli inspect "urn:tei:purl:pypi.sbomify.com:pkg:pypi/cryptography@44.0.2"
+
+<span class="text-gray-500"># Search for a specific package version by PURL</span>
+$ tea-cli search-releases --id-type PURL \
+    --id-value "pkg:pypi/cryptography@44.0.2" --domain pypi.sbomify.com</code></pre>
+        </div>
+        <p class="text-xs text-gray-600 mt-3">
+          Also available as a <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Python library</a>:
+          <code class="text-gray-400 bg-gray-950 px-1.5 py-0.5 rounded text-xs">from libtea import TeaClient</code>
+        </p>
       </div>
 
       <div>
@@ -516,6 +550,15 @@
         document.getElementById('error').classList.remove('hidden');
         document.getElementById('error').textContent = 'Failed to load stats: ' + err.message;
       }
+    }
+
+    function copyCode() {
+      const code = document.getElementById('tea-example').textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        const btn = document.querySelector('[aria-label="Copy code"]');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+      });
     }
 
     refreshAll();
