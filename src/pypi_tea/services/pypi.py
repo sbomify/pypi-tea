@@ -67,12 +67,8 @@ def filter_wheels_by_platform(
             result.append(wheel)
             continue
 
-        os_match = os_substrings is None or any(
-            any(sub in p for sub in os_substrings) for p in platform_strs
-        )
-        arch_match = arch_substrings is None or any(
-            any(sub in p for sub in arch_substrings) for p in platform_strs
-        )
+        os_match = os_substrings is None or any(any(sub in p for sub in os_substrings) for p in platform_strs)
+        arch_match = arch_substrings is None or any(any(sub in p for sub in arch_substrings) for p in platform_strs)
 
         if os_match and arch_match:
             result.append(wheel)
