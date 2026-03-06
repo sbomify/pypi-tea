@@ -161,38 +161,28 @@
         <h2 class="text-sm font-medium text-gray-400 mb-2">How to use TEA</h2>
         <p class="text-xs text-gray-600 mb-4">
           The <a href="https://github.com/CycloneDX/transparency-exchange-api" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Transparency Exchange API (TEA)</a>
-          is an open standard for discovering SBOMs. You can query this server programmatically using
-          <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">libtea</a>,
-          the Python TEA client:
+          is an open standard for discovering SBOMs. You can query this server using
+          <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">tea-cli</a>:
         </p>
         <div class="relative">
           <button onclick="copyCode()" class="absolute top-2 right-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400 border border-gray-700 transition-colors cursor-pointer" aria-label="Copy code">Copy</button>
-          <pre class="bg-gray-950 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed border border-gray-800"><code id="tea-example" class="text-gray-300"><span class="text-gray-500"># pip install libtea</span>
-<span class="text-purple-400">from</span> libtea <span class="text-purple-400">import</span> TeaClient
+          <pre class="bg-gray-950 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed border border-gray-800"><code id="tea-example" class="text-gray-300"><span class="text-gray-500"># Install the TEA CLI</span>
+$ pip install libtea[cli]
 
-<span class="text-purple-400">with</span> TeaClient.from_well_known(<span class="text-green-400">"pypi.sbomify.com"</span>) <span class="text-purple-400">as</span> client:
-    <span class="text-gray-500"># Search for a package by PURL</span>
-    results = client.search_product_releases(
-        <span class="text-green-400">"PURL"</span>, <span class="text-green-400">"pkg:pypi/maturin@1.8.1"</span>
-    )
+<span class="text-gray-500"># Inspect a PyPI package — discovers SBOMs via TEA in one shot</span>
+$ tea-cli inspect "urn:tei:purl:pypi.sbomify.com:pkg:pypi/maturin@1.8.1"
 
-    <span class="text-purple-400">for</span> release <span class="text-purple-400">in</span> results.results:
-        <span class="text-gray-500"># Get the SBOM collection for this release</span>
-        collection = client.get_product_release_collection_latest(
-            release.uuid
-        )
-        <span class="text-purple-400">for</span> artifact <span class="text-purple-400">in</span> collection.artifacts:
-            print(f<span class="text-green-400">"{artifact.name} ({artifact.type})"</span>)
+<span class="text-gray-500"># Search for a package by PURL</span>
+$ tea-cli search-releases --id-type PURL --id-value "pkg:pypi/maturin" \
+    --domain pypi.sbomify.com
 
-            <span class="text-gray-500"># Download the SBOM with checksum verification</span>
-            fmt = artifact.formats[<span class="text-amber-400">0</span>]
-            client.download_artifact(
-                fmt.url, f<span class="text-green-400">"./{artifact.name}"</span>,
-                verify_checksums=fmt.checksums,
-            )</code></pre>
+<span class="text-gray-500"># Download an SBOM with checksum verification</span>
+$ tea-cli download &lt;artifact-url&gt; ./sbom.json \
+    --checksum "SHA-256:abc123..." --domain pypi.sbomify.com</code></pre>
         </div>
         <p class="text-xs text-gray-600 mt-3">
-          Or use the CLI: <code class="text-gray-400 bg-gray-950 px-1.5 py-0.5 rounded text-xs">tea-cli inspect "urn:tei:purl:pypi.sbomify.com:pkg:pypi/maturin@1.8.1"</code>
+          Also available as a <a href="https://pypi.org/project/libtea/" class="text-gray-400 hover:text-gray-300 underline underline-offset-2">Python library</a>:
+          <code class="text-gray-400 bg-gray-950 px-1.5 py-0.5 rounded text-xs">from libtea import TeaClient</code>
         </p>
       </div>
 
