@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -99,7 +100,15 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
     if not sbom_files:
         await cache.set_negative_cache(wheel.url)
         return []
-    result = [{"path": s.path, "content": s.content, "media_type": s.media_type} for s in sbom_files]
+    result = [
+        {
+            "path": s.path,
+            "content": s.content,
+            "media_type": s.media_type,
+            "sha256": hashlib.sha256(s.content.encode()).hexdigest(),
+        }
+        for s in sbom_files
+    ]
     await cache.set_sbom_content(wheel.url, result)
     await _track_sbom_formats(cache, wheel.url, result)
     return result
@@ -118,6 +127,10 @@ def _build_artifact(wheel: WheelInfo, sbom: dict[str, Any]) -> Artifact:
     a_uuid = artifact_uuid(wheel.url, sbom["path"])
     sbom_filename = sbom["path"].split("/")[-1]
     artifact_url = f"{settings.server_root_url}/v{settings.tea_spec_version}/artifact/{a_uuid}/download"
+    checksums: tuple[Checksum, ...] = ()
+    sha256 = sbom.get("sha256")
+    if sha256:
+        checksums = (Checksum(algType=ChecksumAlgorithm.SHA_256, algValue=sha256),)
     return Artifact(
         uuid=a_uuid,
         name=sbom_filename,
@@ -126,6 +139,7 @@ def _build_artifact(wheel: WheelInfo, sbom: dict[str, Any]) -> Artifact:
             ArtifactFormat(
                 media_type=sbom["media_type"],
                 url=artifact_url,
+                checksums=checksums,
             ),
         ),
     )

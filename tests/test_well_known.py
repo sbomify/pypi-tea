@@ -110,6 +110,26 @@ class TestArtifactDownload:
         data = resp.json()
         assert "bomFormat" in data or "spdxVersion" in data
 
+    def test_artifact_has_sha256_checksum(self, client: httpx.Client):
+        """Artifact format should include a SHA-256 checksum matching the SBOM content."""
+        import hashlib
+
+        a_uuid = self._get_artifact_uuid(client)
+        resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}")
+        assert resp.status_code == 200
+        artifact = resp.json()
+        fmt = artifact["formats"][0]
+        checksums = fmt.get("checksums", [])
+        assert len(checksums) > 0, "artifact format should have at least one checksum"
+        sha256_entry = next((c for c in checksums if c["algType"] == "SHA-256"), None)
+        assert sha256_entry is not None, "artifact format should have a SHA-256 checksum"
+
+        # Verify the checksum matches the actual SBOM content
+        download_resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}/download")
+        assert download_resp.status_code == 200
+        expected = hashlib.sha256(download_resp.content).hexdigest()
+        assert sha256_entry["algValue"] == expected
+
     def test_download_unknown_uuid_returns_404(self, client: httpx.Client):
         fake_uuid = "00000000-0000-0000-0000-000000000000"
         resp = client.get(f"/v{settings.tea_spec_version}/artifact/{fake_uuid}/download")
