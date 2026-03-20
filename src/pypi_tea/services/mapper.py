@@ -31,6 +31,7 @@ from packageurl import PackageURL
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
+from pypi_tea.services.attestation import check_wheel_attestation
 from pypi_tea.services.pypi import WheelInfo, extract_wheel_urls, filter_wheels_by_platform, get_version_metadata
 from pypi_tea.services.sbom_extractor import extract_sboms
 from pypi_tea.services.sbom_format import detect_sbom_format, validate_sbom
@@ -221,6 +222,8 @@ async def resolve_purl(
         sboms = await _get_sboms_for_wheel(cache, wheel)
         if sboms:
             sboms_by_wheel[wheel.url] = sboms
+    for wheel in wheels:
+        await check_wheel_attestation(client, cache, name, version, wheel)
     await _store_uuid_lookups(cache, name, version, all_wheels, sboms_by_wheel)
     await cache.track_package_query(name, version, has_sbom=bool(sboms_by_wheel))
     await cache.track_query(name, version, qualifiers.os_name, qualifiers.arch, has_sbom=bool(sboms_by_wheel))

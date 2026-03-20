@@ -12,7 +12,16 @@ from fastapi.responses import HTMLResponse
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
-from pypi_tea.routes import artifacts, component_releases, components, discovery, product_releases, products, stats
+from pypi_tea.routes import (
+    artifacts,
+    attestation,
+    component_releases,
+    components,
+    discovery,
+    product_releases,
+    products,
+    stats,
+)
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
@@ -46,6 +55,7 @@ app.include_router(components.router)
 app.include_router(component_releases.router)
 app.include_router(artifacts.router)
 app.include_router(stats.router)
+app.include_router(attestation.router)
 
 # TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
 # after probing /.well-known/tea, so mount API routes under the version prefix too.
@@ -66,6 +76,7 @@ app.include_router(components.router, prefix=_version_prefix)
 app.include_router(component_releases.router, prefix=_version_prefix)
 app.include_router(artifacts.router, prefix=_version_prefix)
 app.include_router(stats.router, prefix=_version_prefix)
+app.include_router(attestation.router, prefix=_version_prefix)
 
 # Cache headers for Cloudflare: TEA data is derived from immutable wheels
 # and cached in Redis, so responses can be cached at the edge.

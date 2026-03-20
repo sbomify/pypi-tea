@@ -7,6 +7,7 @@ import redis.asyncio as redis
 PYPI_TTL = 3600  # 1 hour
 SBOM_TTL = 86400  # 24 hours
 NEGATIVE_TTL = 86400  # 24 hours
+ATTESTATION_TTL = 86400  # 24 hours
 
 STATS_KEY = "stats"
 STATS_BUCKET_PREFIX = "stats:ts:"
@@ -21,6 +22,8 @@ UNIQUE_WHEELS_WITHOUT_SBOM = "unique:wheels_without_sbom"
 UNIQUE_SBOM_FORMATS_TRACKED = "unique:sbom_formats_tracked"
 UNIQUE_SBOM_VALIDATION = "unique:sbom_validation"
 UNIQUE_SBOM_ENCODINGS = "unique:sbom_encodings"
+UNIQUE_ATTESTATION_STATUS = "unique:attestation_status"
+UNIQUE_ATTESTATION_PUBLISHERS = "unique:attestation_publishers"
 
 # Daily set prefixes for time series (with TTL)
 DAILY_PACKAGES_PREFIX = "daily:packages:"
@@ -151,6 +154,41 @@ class Cache:
         if previous:
             pipe.hincrby(STATS_KEY, f"sbom_encoding:{previous}", -1)
         pipe.hincrby(STATS_KEY, f"sbom_encoding:{media_type}", 1)
+        await pipe.execute()
+
+    # --- Attestation cache ---
+
+    async def get_attestation(self, wheel_url: str) -> dict[str, Any] | None:
+        data = await self._client.get(f"att:{wheel_url}")
+        if data is None:
+            return None
+        return json.loads(data)  # type: ignore[no-any-return]
+
+    async def set_attestation(self, wheel_url: str, result: dict[str, Any]) -> None:
+        await self._client.set(f"att:{wheel_url}", json.dumps(result), ex=ATTESTATION_TTL)
+
+    async def track_attestation_status(self, wheel_url: str, status: str) -> None:
+        """Track attestation status per wheel. Same idempotent pattern as track_sbom_format."""
+        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_STATUS, wheel_url)  # type: ignore[misc]
+        if previous == status:
+            return
+        pipe = self._client.pipeline()
+        pipe.hset(UNIQUE_ATTESTATION_STATUS, wheel_url, status)
+        if previous:
+            pipe.hincrby(STATS_KEY, f"attestation:{previous}", -1)
+        pipe.hincrby(STATS_KEY, f"attestation:{status}", 1)
+        await pipe.execute()
+
+    async def track_attestation_publisher(self, wheel_url: str, publisher_kind: str) -> None:
+        """Track attestation publisher per wheel. Same idempotent pattern."""
+        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_PUBLISHERS, wheel_url)  # type: ignore[misc]
+        if previous == publisher_kind:
+            return
+        pipe = self._client.pipeline()
+        pipe.hset(UNIQUE_ATTESTATION_PUBLISHERS, wheel_url, publisher_kind)
+        if previous:
+            pipe.hincrby(STATS_KEY, f"attestation_publisher:{previous}", -1)
+        pipe.hincrby(STATS_KEY, f"attestation_publisher:{publisher_kind}", 1)
         await pipe.execute()
 
     # --- Package-level tracking ---
@@ -385,6 +423,22 @@ class Cache:
     def _extract_sbom_encodings(counters: dict[str, int]) -> dict[str, int]:
         return {k.removeprefix("sbom_encoding:"): v for k, v in counters.items() if k.startswith("sbom_encoding:")}
 
+    @staticmethod
+    def _extract_attestations(counters: dict[str, int]) -> dict[str, int]:
+        return {
+            k.removeprefix("attestation:"): v
+            for k, v in counters.items()
+            if k.startswith("attestation:") and not k.startswith("attestation_publisher:")
+        }
+
+    @staticmethod
+    def _extract_attestation_publishers(counters: dict[str, int]) -> dict[str, int]:
+        return {
+            k.removeprefix("attestation_publisher:"): v
+            for k, v in counters.items()
+            if k.startswith("attestation_publisher:")
+        }
+
     async def get_stats(self) -> dict[str, Any]:
         raw = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
         counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
@@ -414,6 +468,8 @@ class Cache:
             "sbom_formats": self._extract_sbom_formats(counters),
             "sbom_validation": self._extract_sbom_validation(counters),
             "sbom_encodings": self._extract_sbom_encodings(counters),
+            "attestations": self._extract_attestations(counters),
+            "attestation_publishers": self._extract_attestation_publishers(counters),
         }
 
     async def get_stats_timeseries(self) -> list[dict[str, Any]]:
