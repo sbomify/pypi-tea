@@ -14,6 +14,7 @@ from pypi_tea.cache import Cache
 from pypi_tea.config import settings
 from pypi_tea.routes import (
     artifacts,
+    attestation,
     component_releases,
     components,
     discovery,
@@ -56,6 +57,7 @@ app.include_router(components.router)
 app.include_router(component_releases.router)
 app.include_router(artifacts.router)
 app.include_router(stats.router)
+app.include_router(attestation.router)
 app.include_router(pages.router)
 app.include_router(seo.router)
 
@@ -78,6 +80,7 @@ app.include_router(components.router, prefix=_version_prefix)
 app.include_router(component_releases.router, prefix=_version_prefix)
 app.include_router(artifacts.router, prefix=_version_prefix)
 app.include_router(stats.router, prefix=_version_prefix)
+app.include_router(attestation.router, prefix=_version_prefix)
 
 # Cache headers for Cloudflare: TEA data is derived from immutable wheels
 # and cached in Redis, so responses can be cached at the edge.
