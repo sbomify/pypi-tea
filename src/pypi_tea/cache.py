@@ -423,9 +423,18 @@ class Cache:
                 filename = wheel_url.rsplit("/", 1)[-1] if "/" in wheel_url else wheel_url
                 wheels_map[wheel_url] = {"filename": filename, "url": wheel_url, "sboms": [sbom_entry]}
 
+        # Enrich wheels with attestation data from cache
+        for url, wheel_data in wheels_map.items():
+            att = await self.get_attestation(url)
+            wheel_data["attestation"] = att
+
         # Only include wheels that have SBOMs
         wheels = [w for w in wheels_map.values() if w["sboms"]]
         wheels.sort(key=lambda w: w["filename"])
+
+        has_attestation = any(
+            (w.get("attestation") or {}).get("status") == "verified" for w in wheels_map.values()
+        )
 
         return {
             "name": package,
@@ -438,6 +447,7 @@ class Cache:
             "classifiers": info.get("classifiers") or [],
             "wheels": wheels,
             "formats": sorted(format_set),
+            "has_attestation": has_attestation,
         }
 
     # --- Usage tracking ---
