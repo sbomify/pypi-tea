@@ -34,7 +34,7 @@ async def _resolve_component_release(
     if not matching_wheel:
         return None
 
-    sboms = await _get_sboms_for_wheel(cache, matching_wheel)
+    sboms = await _get_sboms_for_wheel(cache, matching_wheel, name, version)
     return matching_wheel, version, metadata, sboms
 
 
