@@ -45,6 +45,7 @@ REDIS_URL = os.environ.get("PYPI_TEA_REDIS_URL", "redis://localhost:6379")
 
 # Redis key names (must match cache.py)
 STATS_KEY = "stats"
+UNIQUE_PACKAGES = "unique:packages"
 UNIQUE_PACKAGES_WITH_SBOM = "unique:packages_with_sbom"
 UNIQUE_WHEELS_WITH_SBOM = "unique:wheels_with_sbom"
 UNIQUE_SBOM_FORMATS_TRACKED = "unique:sbom_formats_tracked"
@@ -330,6 +331,7 @@ async def load_into_redis(
 
         # Write tracking sets
         pipe = r.pipeline()
+        pipe.sadd(UNIQUE_PACKAGES, f"{name}@{version}")
         pipe.sadd(UNIQUE_WHEELS_WITH_SBOM, wheel_url)
         pipe.sadd(UNIQUE_PACKAGES_WITH_SBOM, f"{name}@{version}")
         await pipe.execute()
