@@ -432,9 +432,7 @@ class Cache:
         wheels = [w for w in wheels_map.values() if w["sboms"]]
         wheels.sort(key=lambda w: w["filename"])
 
-        has_attestation = any(
-            (w.get("attestation") or {}).get("status") == "verified" for w in wheels_map.values()
-        )
+        has_attestation = any((w.get("attestation") or {}).get("status") == "verified" for w in wheels_map.values())
 
         return {
             "name": package,
