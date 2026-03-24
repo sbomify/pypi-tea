@@ -39,6 +39,10 @@ USAGE_RECENT_MAX = 100
 USAGE_DAILY_QUERIES_PREFIX = "usage:daily_queries:"
 USAGE_QUALIFIER_QUERIES = "usage:qualifier_query_count"
 
+# Per-package format tracking for SEO pages
+PKG_FORMATS_PREFIX = "pkg_formats:"  # pkg_formats:{name}@{version} → set of format strings
+FORMAT_PACKAGES_PREFIX = "format_pkgs:"  # format_pkgs:{family} → set of name@version
+
 
 def _current_bucket() -> int:
     return int(time.time()) // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
@@ -314,6 +318,127 @@ class Cache:
             results.append(entry)
 
         return results
+
+    # --- Per-package format tracking (for SEO pages) ---
+
+    async def track_package_format(self, package: str, version: str, format_key: str) -> None:
+        """Index SBOM format per package for browsing/filtering."""
+        key = f"{package}@{version}"
+        family = format_key.split("/")[0]  # "CycloneDX/1.6" → "CycloneDX"
+        pipe = self._client.pipeline()
+        pipe.sadd(f"{PKG_FORMATS_PREFIX}{key}", format_key)
+        pipe.sadd(f"{FORMAT_PACKAGES_PREFIX}{family}", key)
+        await pipe.execute()
+
+    async def get_packages_with_sbom(self, offset: int = 0, limit: int = 0) -> tuple[list[str], int]:
+        """Return sorted package@version strings from the SBOM set."""
+        members: set[str] = await self._client.smembers(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        total = len(members)
+        items = sorted(members)
+        if limit > 0:
+            items = items[offset : offset + limit]
+        return items, total
+
+    async def get_packages_with_sbom_by_format(
+        self, format_family: str, offset: int = 0, limit: int = 50
+    ) -> tuple[list[str], int]:
+        """Return packages filtered by SBOM format family (e.g. 'CycloneDX', 'SPDX')."""
+        # Intersect format index with packages-with-sbom to ensure consistency
+        family_members: set[str] = await self._client.smembers(f"{FORMAT_PACKAGES_PREFIX}{format_family}")  # type: ignore[misc]
+        sbom_members: set[str] = await self._client.smembers(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        matched = sorted(family_members & sbom_members)
+        total = len(matched)
+        items = matched[offset : offset + limit]
+        return items, total
+
+    async def get_package_formats(self, package: str, version: str) -> list[str]:
+        """Return SBOM format strings for a package (e.g. ['CycloneDX/1.6'])."""
+        members: set[str] = await self._client.smembers(f"{PKG_FORMATS_PREFIX}{package}@{version}")  # type: ignore[misc]
+        return sorted(members)
+
+    async def get_package_page_data(self, package: str, version: str) -> dict[str, Any] | None:
+        """Aggregate all data needed to render a package SEO page."""
+        key = f"{package}@{version}"
+        is_member: bool = await self._client.sismember(UNIQUE_PACKAGES_WITH_SBOM, key)  # type: ignore[misc]
+        if not is_member:
+            return None
+
+        # PyPI metadata (may have expired — gracefully degrade)
+        metadata = await self.get_pypi_metadata(package, version)
+        info = metadata.get("info", {}) if metadata else {}
+
+        # Find all artifacts for this package+version via UUID lookups
+        artifacts = await self.find_by_entity_type_and_field("artifact", "name", package)
+        artifacts = [a for a in artifacts if a.get("version") == version]
+
+        # Find all component_releases (wheels) for this package+version
+        comp_releases = await self.find_by_entity_type_and_field("component_release", "name", package)
+        comp_releases = [cr for cr in comp_releases if cr.get("version") == version]
+
+        # Build wheel → sbom mapping
+        wheels_map: dict[str, dict[str, Any]] = {}
+        for cr in comp_releases:
+            filename = cr.get("filename", "")
+            url = cr.get("url", "")
+            if filename and url:
+                wheels_map[url] = {"filename": filename, "url": url, "sboms": []}
+
+        # Populate SBOMs per wheel
+        format_set: set[str] = set()
+        for art in artifacts:
+            wheel_url = art.get("wheel_url", "")
+            sbom_path = art.get("sbom_path", "")
+            a_uuid = art.get("uuid", "")
+            sbom_id = f"{wheel_url}:{sbom_path}"
+
+            # Get format and validation from tracking hashes
+            pipe = self._client.pipeline()
+            pipe.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)
+            pipe.hget(UNIQUE_SBOM_VALIDATION, sbom_id)
+            pipe.hget(UNIQUE_SBOM_ENCODINGS, sbom_id)
+            fmt_raw, valid_raw, encoding_raw = await pipe.execute()
+
+            fmt: str | None = fmt_raw
+            family = fmt.split("/")[0] if fmt else None
+            valid: bool | None = valid_raw == "valid" if valid_raw else None
+            media_type: str = encoding_raw or "application/octet-stream"
+
+            if family:
+                format_set.add(family)
+
+            sbom_entry = {
+                "artifact_uuid": a_uuid,
+                "path": sbom_path,
+                "format": fmt,
+                "format_family": family,
+                "valid": valid,
+                "media_type": media_type,
+                "download_url": f"/artifact/{a_uuid}/download",
+            }
+
+            if wheel_url in wheels_map:
+                wheels_map[wheel_url]["sboms"].append(sbom_entry)
+            else:
+                # Wheel not in comp_releases (shouldn't happen, but be safe)
+                filename = wheel_url.rsplit("/", 1)[-1] if "/" in wheel_url else wheel_url
+                wheels_map[wheel_url] = {"filename": filename, "url": wheel_url, "sboms": [sbom_entry]}
+
+        # Only include wheels that have SBOMs
+        wheels = [w for w in wheels_map.values() if w["sboms"]]
+        wheels.sort(key=lambda w: w["filename"])
+
+        return {
+            "name": package,
+            "version": version,
+            "summary": info.get("summary"),
+            "author": info.get("author"),
+            "project_urls": info.get("project_urls") or {},
+            "requires_python": info.get("requires_python"),
+            "license": info.get("license"),
+            "classifiers": info.get("classifiers") or [],
+            "wheels": wheels,
+            "formats": sorted(format_set),
+        }
 
     # --- Usage tracking ---
 

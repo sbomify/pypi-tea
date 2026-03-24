@@ -18,8 +18,10 @@ from pypi_tea.routes import (
     component_releases,
     components,
     discovery,
+    pages,
     product_releases,
     products,
+    seo,
     stats,
 )
 
@@ -56,6 +58,8 @@ app.include_router(component_releases.router)
 app.include_router(artifacts.router)
 app.include_router(stats.router)
 app.include_router(attestation.router)
+app.include_router(pages.router)
+app.include_router(seo.router)
 
 # TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
 # after probing /.well-known/tea, so mount API routes under the version prefix too.
@@ -87,6 +91,9 @@ _CACHE_RULES: dict[str, str] = {
     "/discovery": "public, max-age=3600, s-maxage=3600",
     "/.well-known/tea": "public, max-age=3600, s-maxage=3600",
     "/stats": "public, max-age=60, s-maxage=60",  # Stats change frequently
+    "/package/": "public, max-age=3600, s-maxage=3600",
+    "/packages": "public, max-age=300, s-maxage=300",
+    "/sitemap": "public, max-age=3600, s-maxage=3600",
 }
 
 

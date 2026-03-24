@@ -89,7 +89,9 @@ async def _get_metadata_cached(client: httpx.AsyncClient, cache: Cache, package:
     return metadata
 
 
-async def _track_sbom_formats(cache: Cache, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
+async def _track_sbom_formats(
+    cache: Cache, wheel_url: str, sboms: list[dict[str, Any]], name: str, version: str
+) -> None:
     """Track SBOM formats, validation, and encoding, deduplicated by wheel_url:path."""
     for sbom in sboms:
         content = sbom["content"]
@@ -101,9 +103,10 @@ async def _track_sbom_formats(cache: Cache, wheel_url: str, sboms: list[dict[str
             await cache.track_sbom_encoding(sbom_id, media_type)
             valid = validate_sbom(content, fmt, media_type)
             await cache.track_sbom_validation(sbom_id, valid)
+            await cache.track_package_format(name, version, fmt)
 
 
-async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str, Any]]:
+async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo, name: str, version: str) -> list[dict[str, Any]]:
     if await cache.is_negative_cached(wheel.url):
         return []
     cached = await cache.get_sbom_content(wheel.url)
@@ -123,7 +126,7 @@ async def _get_sboms_for_wheel(cache: Cache, wheel: WheelInfo) -> list[dict[str,
         for s in sbom_files
     ]
     await cache.set_sbom_content(wheel.url, result)
-    await _track_sbom_formats(cache, wheel.url, result)
+    await _track_sbom_formats(cache, wheel.url, result, name, version)
     return result
 
 
@@ -219,7 +222,7 @@ async def resolve_purl(
     wheels = filter_wheels_by_platform(all_wheels, qualifiers.os_name, qualifiers.arch)
     sboms_by_wheel: dict[str, list[dict[str, Any]]] = {}
     for wheel in wheels:
-        sboms = await _get_sboms_for_wheel(cache, wheel)
+        sboms = await _get_sboms_for_wheel(cache, wheel, name, version)
         if sboms:
             sboms_by_wheel[wheel.url] = sboms
     for wheel in wheels:

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}SBOM for {{ name }} {{ version }} — pypi-tea{% endblock %}
+
+{% block meta %}
+  <meta name="description" content="Download {{ formats|join(', ') }} SBOM for {{ name }} {{ version }}.{% if summary %} {{ summary }}{% endif %}">
+  <meta name="keywords" content="SBOM, {{ name }}, {{ version }}, {% for f in formats %}{{ f }}, {% endfor %}Software Bill of Materials, PyPI, Python, supply chain security">
+  <link rel="canonical" href="{{ canonical_url }}">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="SBOM for {{ name }} {{ version }}">
+  <meta property="og:description" content="Download {{ formats|join(', ') }} SBOM for the {{ name }} Python package (version {{ version }}).{% if summary %} {{ summary }}{% endif %}">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="og:site_name" content="pypi-tea">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="SBOM for {{ name }} {{ version }}">
+  <meta name="twitter:description" content="Download {{ formats|join(', ') }} SBOM for {{ name }} {{ version }}. Python supply chain transparency via TEA.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "{{ name }}",
+    "version": "{{ version }}",
+    {% if summary %}"description": {{ summary | tojson }},{% endif %}
+    "programmingLanguage": "Python",
+    "codeRepository": "https://pypi.org/project/{{ name }}/{{ version }}/",
+    "runtimePlatform": "Python{% if requires_python %} {{ requires_python }}{% endif %}",
+    "maintainer": {
+      "@type": "Organization",
+      "name": "sbomify",
+      "url": "https://sbomify.com"
+    },
+    "hasPart": [
+      {% set all_sboms = [] %}{% for wheel in wheels %}{% for sbom in wheel.sboms %}{% if all_sboms.append(sbom) %}{% endif %}{% endfor %}{% endfor %}
+      {% for sbom in all_sboms %}{
+        "@type": "DigitalDocument",
+        "name": {{ sbom.path | tojson }},
+        "encodingFormat": {{ sbom.media_type | tojson }},
+        "url": "{{ server_root_url }}{{ sbom.download_url }}"
+      }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]
+  }
+  </script>
+{% endblock %}
+
+{% block content %}
+  <article>
+    <!-- Breadcrumb -->
+    <nav class="text-sm text-gray-500 mb-6" aria-label="Breadcrumb">
+      <a href="/packages" class="hover:text-gray-300">Packages</a>
+      <span class="mx-1">/</span>
+      <span class="text-gray-300">{{ name }} {{ version }}</span>
+    </nav>
+
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold">SBOM for {{ name }} <span class="text-gray-400">{{ version }}</span></h1>
+      {% if summary %}
+      <p class="text-gray-400 mt-2 text-lg">{{ summary }}</p>
+      {% endif %}
+      <div class="flex flex-wrap gap-2 mt-4">
+        {% for fmt in formats %}
+        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium {% if 'CycloneDX' in fmt %}bg-cyan-900/50 text-cyan-300 border border-cyan-800{% elif 'SPDX' in fmt %}bg-purple-900/50 text-purple-300 border border-purple-800{% else %}bg-gray-800 text-gray-300 border border-gray-700{% endif %}">{{ fmt }}</span>
+        {% endfor %}
+      </div>
+    </header>
+
+    <!-- Package metadata -->
+    <section class="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
+      <h2 class="text-lg font-semibold mb-4">Package Information</h2>
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+        {% if author %}
+        <div>
+          <dt class="text-gray-500">Author</dt>
+          <dd>{{ author }}</dd>
+        </div>
+        {% endif %}
+        {% if license %}
+        <div>
+          <dt class="text-gray-500">License</dt>
+          <dd>{{ license }}</dd>
+        </div>
+        {% endif %}
+        {% if requires_python %}
+        <div>
+          <dt class="text-gray-500">Requires Python</dt>
+          <dd>{{ requires_python }}</dd>
+        </div>
+        {% endif %}
+        <div>
+          <dt class="text-gray-500">PyPI</dt>
+          <dd><a href="https://pypi.org/project/{{ name }}/{{ version }}/" class="text-cyan-400 hover:text-cyan-300" rel="noopener">{{ name }} {{ version }}</a></dd>
+        </div>
+        {% for label, url in project_urls.items() %}
+        <div>
+          <dt class="text-gray-500">{{ label }}</dt>
+          <dd><a href="{{ url }}" class="text-cyan-400 hover:text-cyan-300 break-all" rel="noopener nofollow">{{ url }}</a></dd>
+        </div>
+        {% endfor %}
+      </dl>
+    </section>
+
+    <!-- SBOM downloads -->
+    <section class="mb-8">
+      <h2 class="text-lg font-semibold mb-4">Available SBOMs</h2>
+      {% for wheel in wheels %}
+      <div class="bg-gray-900 rounded-xl border border-gray-800 mb-4 overflow-hidden">
+        <div class="px-6 py-3 bg-gray-800/50 border-b border-gray-800">
+          <h3 class="text-sm font-mono text-gray-300 break-all">{{ wheel.filename }}</h3>
+        </div>
+        <div class="divide-y divide-gray-800">
+          {% for sbom in wheel.sboms %}
+          <div class="px-6 py-4 flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3 min-w-0">
+              {% if sbom.valid is not none %}
+              <span class="flex-shrink-0 {% if sbom.valid %}text-green-400{% else %}text-red-400{% endif %}" title="{% if sbom.valid %}Valid{% else %}Invalid{% endif %}">
+                {% if sbom.valid %}
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {% else %}
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                {% endif %}
+              </span>
+              {% endif %}
+              <div class="min-w-0">
+                <div class="text-sm font-mono text-gray-300 truncate">{{ sbom.path.split('/')[-1] }}</div>
+                <div class="text-xs text-gray-500 flex flex-wrap gap-2 mt-1">
+                  {% if sbom.format %}<span>{{ sbom.format }}</span>{% endif %}
+                  <span>{{ sbom.media_type }}</span>
+                </div>
+              </div>
+            </div>
+            <a href="{{ sbom.download_url }}" class="flex-shrink-0 inline-flex items-center px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors" download>
+              <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Download
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <!-- TEA usage -->
+    <section class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+      <h2 class="text-lg font-semibold mb-4">Access via TEA</h2>
+      <p class="text-sm text-gray-400 mb-3">Use the <a href="https://github.com/CycloneDX/transparency-exchange-api" class="text-cyan-400 hover:text-cyan-300">Transparency Exchange API</a> to fetch this SBOM programmatically:</p>
+      <pre class="bg-gray-800 rounded-lg p-4 text-sm overflow-x-auto"><code class="text-cyan-300">pip install libtea
+python -m libtea {{ server_root_url }} pkg:pypi/{{ name }}@{{ version }}</code></pre>
+    </section>
+  </article>
+{% endblock %}

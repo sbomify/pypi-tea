@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}pypi-tea{% endblock %}</title>
+  {% block meta %}{% endblock %}
+  <meta name="robots" content="index, follow">
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <header class="mb-10 flex items-center justify-between">
+      <div>
+        <a href="/" class="text-3xl font-bold tracking-tight hover:text-white">pypi-tea</a>
+        <p class="text-gray-400 mt-1">SBOM Coverage for PyPI Packages</p>
+      </div>
+      <nav class="flex gap-4 text-sm">
+        <a href="/" class="text-gray-400 hover:text-white transition-colors">Dashboard</a>
+        <a href="/packages" class="text-gray-400 hover:text-white transition-colors">Browse Packages</a>
+      </nav>
+    </header>
+
+    {% block content %}{% endblock %}
+
+    <footer class="mt-16 pt-8 border-t border-gray-800 text-gray-500 text-xs flex items-center justify-between">
+      <div>
+        <a href="https://github.com/sbomify/pypi-tea" class="hover:text-gray-300">GitHub</a>
+        <span class="mx-2">&middot;</span>
+        <a href="https://sbomify.com" class="hover:text-gray-300">sbomify</a>
+        <span class="mx-2">&middot;</span>
+        <a href="https://pypi.org/project/libtea/" class="hover:text-gray-300">libtea</a>
+      </div>
+      <div>pypi-tea {{ version }}</div>
+    </footer>
+  </div>
+</body>
+</html>

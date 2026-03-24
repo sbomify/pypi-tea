@@ -53,9 +53,14 @@
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
   <div class="max-w-6xl mx-auto px-6 py-10">
-    <header class="mb-10">
-      <h1 class="text-3xl font-bold tracking-tight">pypi-tea</h1>
-      <p class="text-gray-400 mt-1">SBOM Coverage for PyPI Packages</p>
+    <header class="mb-10 flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">pypi-tea</h1>
+        <p class="text-gray-400 mt-1">SBOM Coverage for PyPI Packages</p>
+      </div>
+      <nav class="flex gap-4 text-sm">
+        <a href="/packages" class="text-gray-400 hover:text-white transition-colors">Browse Packages</a>
+      </nav>
     </header>
 
     <div id="loading" class="text-gray-500">Loading stats...</div>
@@ -635,9 +640,25 @@ $ tea-cli search-releases --id-type PURL \
       document.getElementById('usage-qualifier-queries').textContent = usage.qualifier_queries.toLocaleString();
       document.getElementById('usage-unique-packages').textContent = usage.top_packages.length.toLocaleString();
 
-      // Top packages
-      const pkgEntries = usage.top_packages.map(p => [p.package, p.queries]);
-      renderBarList('usage-top-packages', pkgEntries, () => 'bg-blue-500');
+      // Top packages (with links to package pages)
+      const pkgEl = document.getElementById('usage-top-packages');
+      if (!usage.top_packages.length) {
+        pkgEl.innerHTML = '<span class="text-gray-600">No data yet</span>';
+      } else {
+        const maxQ = usage.top_packages[0].queries;
+        pkgEl.innerHTML = usage.top_packages.map(p => {
+          const pct = maxQ > 0 ? (p.queries / maxQ * 100) : 0;
+          const parts = p.package.split('@');
+          const name = parts[0];
+          const ver = parts[1] || '';
+          const href = `/package/${name}/${ver}`;
+          return `<div class="flex items-center gap-3">
+            <div class="w-32 truncate text-xs" title="${p.package}"><a href="${href}" class="text-cyan-400 hover:text-cyan-300">${p.package}</a></div>
+            <div class="flex-1 bg-gray-800 rounded-full h-2"><div class="bg-blue-500 h-2 rounded-full" style="width:${pct}%"></div></div>
+            <div class="text-xs text-gray-500 w-12 text-right">${p.queries.toLocaleString()}</div>
+          </div>`;
+        }).join('');
+      }
 
       // Endpoints
       const epEntries = Object.entries(usage.endpoints).sort((a, b) => b[1] - a[1]);

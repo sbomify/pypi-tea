@@ -116,7 +116,7 @@ async def get_product_releases(
         wheels = extract_wheel_urls(metadata)
         sboms_by_wheel: dict[str, list[dict[str, Any]]] = {}
         for wheel in wheels:
-            sboms = await _get_sboms_for_wheel(cache, wheel)
+            sboms = await _get_sboms_for_wheel(cache, wheel, entry["name"], entry["version"])
             if sboms:
                 sboms_by_wheel[wheel.url] = sboms
         pr = build_product_release(entry["name"], entry["version"], metadata, wheels, sboms_by_wheel)
