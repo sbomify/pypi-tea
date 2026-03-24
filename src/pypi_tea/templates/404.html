@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Package Not Found — pypi-tea{% endblock %}
+
+{% block content %}
+  <div class="text-center py-16 text-gray-500">
+    <h1 class="text-2xl font-bold mb-4">Package Not Found</h1>
+    <p>No SBOM data found for this package. It may not have been queried yet.</p>
+    <p class="mt-4"><a href="/packages" class="text-cyan-400 hover:text-cyan-300">Browse packages</a></p>
+  </div>
+{% endblock %}
