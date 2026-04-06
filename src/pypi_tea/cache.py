@@ -43,6 +43,9 @@ USAGE_QUALIFIER_QUERIES = "usage:qualifier_query_count"
 PKG_FORMATS_PREFIX = "pkg_formats:"  # pkg_formats:{name}@{version} → set of format strings
 FORMAT_PACKAGES_PREFIX = "format_pkgs:"  # format_pkgs:{family} → set of name@version
 
+# Per-package entity index (avoids full entity-type scans)
+PKG_ENTITIES_PREFIX = "pkg_ent:"  # pkg_ent:{name}@{version}:{entity_type} → set of UUIDs
+
 
 def _current_bucket() -> int:
     return int(time.time()) // STATS_BUCKET_SIZE * STATS_BUCKET_SIZE
@@ -223,8 +226,15 @@ class Cache:
 
     async def set_uuid_lookup(self, uuid: str, entity_type: str, data: dict[str, Any]) -> None:
         payload = {"entity_type": entity_type, **data}
-        await self._client.set(f"uuid:{uuid}", json.dumps(payload))
-        await self._client.sadd(f"etype:{entity_type}", uuid)  # type: ignore[misc]
+        pipe = self._client.pipeline()
+        pipe.set(f"uuid:{uuid}", json.dumps(payload))
+        pipe.sadd(f"etype:{entity_type}", uuid)
+        # Index by package name+version for efficient per-package lookups
+        name = data.get("name")
+        version = data.get("version")
+        if name and version:
+            pipe.sadd(f"{PKG_ENTITIES_PREFIX}{name}@{version}:{entity_type}", uuid)
+        await pipe.execute()
 
     async def find_by_entity_type_and_field(self, entity_type: str, field: str, value: str) -> list[dict[str, Any]]:
         uuids = await self._client.smembers(f"etype:{entity_type}")  # type: ignore[misc]
@@ -241,6 +251,29 @@ class Cache:
                 continue
             data: dict[str, Any] = json.loads(raw)
             if data.get(field) == value:
+                results.append({"uuid": uuid, **data})
+        return results
+
+    async def find_by_package(self, entity_type: str, name: str, version: str) -> list[dict[str, Any]]:
+        """Fetch entities for a specific package+version using the per-package index.
+
+        Falls back to the full scan if the index is empty (not yet populated).
+        """
+        index_key = f"{PKG_ENTITIES_PREFIX}{name}@{version}:{entity_type}"
+        uuids: set[str] = await self._client.smembers(index_key)  # type: ignore[misc]
+        if not uuids:
+            # Fallback: index not yet populated for this package
+            all_results = await self.find_by_entity_type_and_field(entity_type, "name", name)
+            return [r for r in all_results if r.get("version") == version]
+        pipe = self._client.pipeline()
+        uuid_list = sorted(uuids)
+        for uuid in uuid_list:
+            pipe.get(f"uuid:{uuid}")
+        values = await pipe.execute()
+        results: list[dict[str, Any]] = []
+        for uuid, raw in zip(uuid_list, values, strict=True):
+            if raw is not None:
+                data: dict[str, Any] = json.loads(raw)
                 results.append({"uuid": uuid, **data})
         return results
 
@@ -330,6 +363,11 @@ class Cache:
         pipe.sadd(f"{FORMAT_PACKAGES_PREFIX}{family}", key)
         await pipe.execute()
 
+    async def get_packages_with_sbom_count(self) -> int:
+        """Return the total number of packages with SBOMs without loading the full set."""
+        result: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        return result
+
     async def get_packages_with_sbom(self, offset: int = 0, limit: int = 0) -> tuple[list[str], int]:
         """Return sorted package@version strings from the SBOM set."""
         members: set[str] = await self._client.smembers(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
@@ -367,13 +405,11 @@ class Cache:
         metadata = await self.get_pypi_metadata(package, version)
         info = metadata.get("info", {}) if metadata else {}
 
-        # Find all artifacts for this package+version via UUID lookups
-        artifacts = await self.find_by_entity_type_and_field("artifact", "name", package)
-        artifacts = [a for a in artifacts if a.get("version") == version]
+        # Find all artifacts for this package+version via per-package index
+        artifacts = await self.find_by_package("artifact", package, version)
 
         # Find all component_releases (wheels) for this package+version
-        comp_releases = await self.find_by_entity_type_and_field("component_release", "name", package)
-        comp_releases = [cr for cr in comp_releases if cr.get("version") == version]
+        comp_releases = await self.find_by_package("component_release", package, version)
 
         # Build wheel → sbom mapping
         wheels_map: dict[str, dict[str, Any]] = {}

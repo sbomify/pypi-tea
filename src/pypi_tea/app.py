@@ -39,6 +39,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = httpx.AsyncClient(
         timeout=30.0,
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
         headers={"User-Agent": f"pypi-tea/{version('pypi-tea')} (https://github.com/sbomify/pypi-tea)"},
     )
     app.state.cache = Cache(settings.redis_url)
