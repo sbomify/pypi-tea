@@ -254,9 +254,7 @@ class Cache:
                 results.append({"uuid": uuid, **data})
         return results
 
-    async def find_by_package(
-        self, entity_type: str, name: str, version: str
-    ) -> list[dict[str, Any]]:
+    async def find_by_package(self, entity_type: str, name: str, version: str) -> list[dict[str, Any]]:
         """Fetch entities for a specific package+version using the per-package index.
 
         Falls back to the full scan if the index is empty (not yet populated).
