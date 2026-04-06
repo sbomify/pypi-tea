@@ -1,4 +1,4 @@
-import xml.etree.ElementTree as ET
+from html import escape
 
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import PlainTextResponse
@@ -12,33 +12,35 @@ router = APIRouter()
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 
 
+def _url_entry(loc: str, priority: str, changefreq: str) -> str:
+    return f"<url><loc>{escape(loc)}</loc><priority>{priority}</priority><changefreq>{changefreq}</changefreq></url>"
+
+
 @router.get("/sitemap.xml")
 async def sitemap(cache: Cache = Depends(get_cache)) -> Response:
     items, _total = await cache.get_packages_with_sbom()
     root_url = settings.server_root_url.rstrip("/")
 
-    urlset = ET.Element("urlset", xmlns=_SITEMAP_NS)
+    # Build XML incrementally as a list of strings to avoid ElementTree overhead
+    parts: list[str] = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<urlset xmlns="{_SITEMAP_NS}">',
+    ]
 
     # Static pages
-    for path, priority in [("/", "1.0"), ("/packages", "0.8")]:
-        url_el = ET.SubElement(urlset, "url")
-        ET.SubElement(url_el, "loc").text = f"{root_url}{path}"
-        ET.SubElement(url_el, "priority").text = priority
-        ET.SubElement(url_el, "changefreq").text = "daily"
+    parts.append(_url_entry(f"{root_url}/", "1.0", "daily"))
+    parts.append(_url_entry(f"{root_url}/packages", "0.8", "daily"))
 
     # Package pages
     for item in items:
-        parts = item.rsplit("@", 1)
-        if len(parts) != 2:
+        split = item.rsplit("@", 1)
+        if len(split) != 2:
             continue
-        name, version = parts
-        url_el = ET.SubElement(urlset, "url")
-        ET.SubElement(url_el, "loc").text = f"{root_url}/package/{name}/{version}"
-        ET.SubElement(url_el, "priority").text = "0.6"
-        ET.SubElement(url_el, "changefreq").text = "weekly"
+        name, version = split
+        parts.append(_url_entry(f"{root_url}/package/{name}/{version}", "0.6", "weekly"))
 
-    xml_bytes = ET.tostring(urlset, encoding="unicode", xml_declaration=False)
-    xml_str = f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}'
+    parts.append("</urlset>")
+    xml_str = "\n".join(parts)
 
     return Response(
         content=xml_str,
