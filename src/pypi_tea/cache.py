@@ -105,6 +105,7 @@ class Cache:
     async def set_sbom_content(self, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
         await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
         await self._client.sadd(UNIQUE_WHEELS_WITH_SBOM, wheel_url)
+
     # --- Negative cache ---
 
     async def is_negative_cached(self, wheel_url: str) -> bool:
@@ -118,6 +119,7 @@ class Cache:
     async def set_negative_cache(self, wheel_url: str) -> None:
         await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL)
         await self._client.sadd(UNIQUE_WHEELS_WITHOUT_SBOM, wheel_url)
+
     # --- SBOM format tracking ---
 
     async def track_sbom_format(self, sbom_id: str, format_key: str) -> None:
@@ -405,9 +407,7 @@ class Cache:
         total: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)
         if total == 0:
             return [], 0
-        items: list[str] = await self._client.sort(
-            UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit
-        )
+        items: list[str] = await self._client.sort(UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit)
         return items, total
 
     async def get_packages_with_sbom_by_format(
