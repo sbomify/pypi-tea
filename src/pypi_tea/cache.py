@@ -104,8 +104,7 @@ class Cache:
 
     async def set_sbom_content(self, wheel_url: str, sboms: list[dict[str, Any]]) -> None:
         await self._client.set(f"sbom:{wheel_url}", json.dumps(sboms), ex=SBOM_TTL)
-        await self._client.sadd(UNIQUE_WHEELS_WITH_SBOM, wheel_url)  # type: ignore[misc]
-
+        await self._client.sadd(UNIQUE_WHEELS_WITH_SBOM, wheel_url)
     # --- Negative cache ---
 
     async def is_negative_cached(self, wheel_url: str) -> bool:
@@ -118,8 +117,7 @@ class Cache:
 
     async def set_negative_cache(self, wheel_url: str) -> None:
         await self._client.set(f"neg:{wheel_url}", "1", ex=NEGATIVE_TTL)
-        await self._client.sadd(UNIQUE_WHEELS_WITHOUT_SBOM, wheel_url)  # type: ignore[misc]
-
+        await self._client.sadd(UNIQUE_WHEELS_WITHOUT_SBOM, wheel_url)
     # --- SBOM format tracking ---
 
     async def track_sbom_format(self, sbom_id: str, format_key: str) -> None:
@@ -130,7 +128,7 @@ class Cache:
         format, it's a no-op; if the format changes, both old and new counts
         are updated.
         """
-        previous: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)
         if previous == format_key:
             return  # already tracked correctly
         pipe = self._client.pipeline()
@@ -143,7 +141,7 @@ class Cache:
     async def track_sbom_validation(self, sbom_id: str, valid: bool) -> None:
         """Track SBOM validation result. Same idempotent pattern as track_sbom_format."""
         result = "valid" if valid else "invalid"
-        previous: str | None = await self._client.hget(UNIQUE_SBOM_VALIDATION, sbom_id)  # type: ignore[misc]
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_VALIDATION, sbom_id)
         if previous == result:
             return
         pipe = self._client.pipeline()
@@ -155,7 +153,7 @@ class Cache:
 
     async def track_sbom_encoding(self, sbom_id: str, media_type: str) -> None:
         """Track SBOM encoding (media type). Same idempotent pattern."""
-        previous: str | None = await self._client.hget(UNIQUE_SBOM_ENCODINGS, sbom_id)  # type: ignore[misc]
+        previous: str | None = await self._client.hget(UNIQUE_SBOM_ENCODINGS, sbom_id)
         if previous == media_type:
             return
         pipe = self._client.pipeline()
@@ -178,7 +176,7 @@ class Cache:
 
     async def track_attestation_status(self, wheel_url: str, status: str) -> None:
         """Track attestation status per wheel. Same idempotent pattern as track_sbom_format."""
-        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_STATUS, wheel_url)  # type: ignore[misc]
+        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_STATUS, wheel_url)
         if previous == status:
             return
         pipe = self._client.pipeline()
@@ -190,7 +188,7 @@ class Cache:
 
     async def track_attestation_publisher(self, wheel_url: str, publisher_kind: str) -> None:
         """Track attestation publisher per wheel. Same idempotent pattern."""
-        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_PUBLISHERS, wheel_url)  # type: ignore[misc]
+        previous: str | None = await self._client.hget(UNIQUE_ATTESTATION_PUBLISHERS, wheel_url)
         if previous == publisher_kind:
             return
         pipe = self._client.pipeline()
@@ -247,21 +245,42 @@ class Cache:
     async def find_by_entity_type_and_field(self, entity_type: str, field: str, value: str) -> list[dict[str, Any]]:
         if field not in self._INDEXED_FIELDS:
             raise ValueError(f"Field {field!r} is not indexed; only {self._INDEXED_FIELDS} are supported")
+        # Try the field index first (populated by set_uuid_lookup)
         index_key = f"efield:{entity_type}:{field}:{value}"
-        uuids: set[str] = await self._client.smembers(index_key)  # type: ignore[misc]
-        if not uuids:
+        uuids: set[str] = await self._client.smembers(index_key)
+        if uuids:
+            pipe = self._client.pipeline()
+            uuid_list = sorted(uuids)
+            for uuid in uuid_list:
+                pipe.get(f"uuid:{uuid}")
+            values = await pipe.execute()
+            results: list[dict[str, Any]] = []
+            for uuid, raw in zip(uuid_list, values, strict=True):
+                if raw is None:
+                    continue
+                data: dict[str, Any] = json.loads(raw)
+                results.append({"uuid": uuid, **data})
+            return results
+        # Fallback: index not yet populated (pre-upgrade data). Scan the full
+        # entity-type set and filter client-side, populating the index as we go
+        # so subsequent calls use the fast path.
+        all_uuids: set[str] = await self._client.smembers(f"etype:{entity_type}")
+        if not all_uuids:
             return []
         pipe = self._client.pipeline()
-        uuid_list = sorted(uuids)
-        for uuid in uuid_list:
+        all_uuid_list = sorted(all_uuids)
+        for uuid in all_uuid_list:
             pipe.get(f"uuid:{uuid}")
         values = await pipe.execute()
-        results: list[dict[str, Any]] = []
-        for uuid, raw in zip(uuid_list, values, strict=True):
+        results = []
+        for uuid, raw in zip(all_uuid_list, values, strict=True):
             if raw is None:
                 continue
-            data: dict[str, Any] = json.loads(raw)
-            results.append({"uuid": uuid, **data})
+            data = json.loads(raw)
+            if data.get(field) == value:
+                results.append({"uuid": uuid, **data})
+                # Backfill the field index so we don't scan again
+                await self._client.sadd(index_key, uuid)
         return results
 
     async def find_by_package(self, entity_type: str, name: str, version: str) -> list[dict[str, Any]]:
@@ -270,7 +289,7 @@ class Cache:
         Falls back to the full scan if the index is empty (not yet populated).
         """
         index_key = f"{PKG_ENTITIES_PREFIX}{name}@{version}:{entity_type}"
-        uuids: set[str] = await self._client.smembers(index_key)  # type: ignore[misc]
+        uuids: set[str] = await self._client.smembers(index_key)
         if not uuids:
             # Fallback: index not yet populated for this package
             all_results = await self.find_by_entity_type_and_field(entity_type, "name", name)
@@ -291,11 +310,11 @@ class Cache:
         self, entity_type: str, offset: int = 0, limit: int = 100
     ) -> tuple[list[dict[str, Any]], int]:
         set_key = f"etype:{entity_type}"
-        total: int = await self._client.scard(set_key)  # type: ignore[misc]
+        total: int = await self._client.scard(set_key)
         if total == 0:
             return [], 0
         # Server-side sort + pagination — only the requested slice crosses the wire
-        uuid_list: list[str] = await self._client.sort(set_key, alpha=True, start=offset, num=limit)  # type: ignore[misc]
+        uuid_list: list[str] = await self._client.sort(set_key, alpha=True, start=offset, num=limit)
         if not uuid_list:
             return [], total
         pipe = self._client.pipeline()
@@ -311,7 +330,7 @@ class Cache:
 
     async def get_invalid_sboms(self) -> list[dict[str, str]]:
         """Return details of all SBOMs that failed validation."""
-        all_results: dict[str, str] = await self._client.hgetall(UNIQUE_SBOM_VALIDATION)  # type: ignore[misc]
+        all_results: dict[str, str] = await self._client.hgetall(UNIQUE_SBOM_VALIDATION)
         invalid_ids = [sbom_id for sbom_id, result in all_results.items() if result == "invalid"]
         if not invalid_ids:
             return []
@@ -349,8 +368,7 @@ class Cache:
             version = name_parts[1] if len(name_parts) > 1 else "unknown"
 
             # Get format info
-            fmt: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)  # type: ignore[misc]
-
+            fmt: str | None = await self._client.hget(UNIQUE_SBOM_FORMATS_TRACKED, sbom_id)
             entry: dict[str, str] = {
                 "package": package,
                 "version": version,
@@ -376,7 +394,7 @@ class Cache:
 
     async def get_packages_with_sbom_count(self) -> int:
         """Return the total number of packages with SBOMs without loading the full set."""
-        result: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        result: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)
         return result
 
     async def get_packages_with_sbom(self, offset: int = 0, limit: int = 50) -> tuple[list[str], int]:
@@ -384,10 +402,10 @@ class Cache:
 
         Use scan_packages_with_sbom() for unbounded iteration instead.
         """
-        total: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        total: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)
         if total == 0:
             return [], 0
-        items: list[str] = await self._client.sort(  # type: ignore[misc]
+        items: list[str] = await self._client.sort(
             UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit
         )
         return items, total
@@ -397,6 +415,9 @@ class Cache:
     ) -> tuple[list[str], int]:
         """Return packages filtered by SBOM format family (e.g. 'CycloneDX', 'SPDX')."""
         family_key = f"{FORMAT_PACKAGES_PREFIX}{format_family}"
+        # Early-return if the format family has no entries (avoids creating temp keys for bogus values)
+        if not await self._client.exists(family_key):
+            return [], 0
         # Intersect server-side into a temporary key to avoid loading both sets
         tmp_key = f"_tmp:fmt_intersect:{format_family}:{os.urandom(4).hex()}"
         pipe = self._client.pipeline()
@@ -404,10 +425,10 @@ class Cache:
         pipe.expire(tmp_key, 30)
         await pipe.execute()
 
-        total: int = await self._client.scard(tmp_key)  # type: ignore[misc]
+        total: int = await self._client.scard(tmp_key)
         if total == 0:
             return [], 0
-        items: list[str] = await self._client.sort(tmp_key, alpha=True, start=offset, num=limit)  # type: ignore[misc]
+        items: list[str] = await self._client.sort(tmp_key, alpha=True, start=offset, num=limit)
         return items, total
 
     async def scan_packages_with_sbom(self) -> AsyncIterator[str]:
@@ -422,13 +443,13 @@ class Cache:
 
     async def get_package_formats(self, package: str, version: str) -> list[str]:
         """Return SBOM format strings for a package (e.g. ['CycloneDX/1.6'])."""
-        members: set[str] = await self._client.smembers(f"{PKG_FORMATS_PREFIX}{package}@{version}")  # type: ignore[misc]
+        members: set[str] = await self._client.smembers(f"{PKG_FORMATS_PREFIX}{package}@{version}")
         return sorted(members)
 
     async def get_package_page_data(self, package: str, version: str) -> dict[str, Any] | None:
         """Aggregate all data needed to render a package SEO page."""
         key = f"{package}@{version}"
-        is_member: bool = await self._client.sismember(UNIQUE_PACKAGES_WITH_SBOM, key)  # type: ignore[misc]
+        is_member: bool = await self._client.sismember(UNIQUE_PACKAGES_WITH_SBOM, key)
         if not is_member:
             return None
 
@@ -640,7 +661,7 @@ class Cache:
         }
 
     async def get_stats(self) -> dict[str, Any]:
-        raw = await self._client.hgetall(STATS_KEY)  # type: ignore[misc]
+        raw = await self._client.hgetall(STATS_KEY)
         counters: dict[str, int] = {k: int(v) for k, v in raw.items()}
 
         pipe = self._client.pipeline()

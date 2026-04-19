@@ -79,3 +79,7 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 module = ["remotezip", "sentry_sdk", "pypi_attestations", "sigstore"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pypi_tea.cache"]
+disable_error_code = ["misc"]  # redis.asyncio stubs return union types (Awaitable[T] | T)

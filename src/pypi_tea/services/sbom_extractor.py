@@ -22,7 +22,20 @@ MAX_FULL_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 # Bounded thread pool for SBOM extraction — limits both concurrency and
 # idle thread memory.  Replaces the default ThreadPoolExecutor (up to 32
 # threads) that asyncio.to_thread() would use.
-_extraction_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="sbom-extract")
+# Created/shutdown via init_pool() / shutdown_pool() called from the FastAPI lifespan.
+_extraction_pool: concurrent.futures.ThreadPoolExecutor | None = None
+
+
+def init_pool() -> None:
+    global _extraction_pool
+    _extraction_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="sbom-extract")
+
+
+def shutdown_pool() -> None:
+    global _extraction_pool
+    if _extraction_pool is not None:
+        _extraction_pool.shutdown(wait=False)
+        _extraction_pool = None
 
 
 @dataclass
@@ -83,5 +96,7 @@ def _extract_sboms_sync(wheel_url: str, wheel_size: int | None = None) -> list[S
 
 
 async def extract_sboms(wheel_url: str, wheel_size: int | None = None) -> list[SBOMFile]:
+    if _extraction_pool is None:
+        raise RuntimeError("Extraction pool not initialised — call init_pool() first")
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_extraction_pool, _extract_sboms_sync, wheel_url, wheel_size)

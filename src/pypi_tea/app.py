@@ -24,6 +24,8 @@ from pypi_tea.routes import (
     seo,
     stats,
 )
+from pypi_tea.services.sbom_extractor import init_pool as _init_extraction_pool
+from pypi_tea.services.sbom_extractor import shutdown_pool as _shutdown_extraction_pool
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
@@ -44,7 +46,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.cache = Cache(settings.redis_url)
     await app.state.cache.init()
+    _init_extraction_pool()
     yield
+    _shutdown_extraction_pool()
     await app.state.http_client.aclose()
     await app.state.cache.close()
 
