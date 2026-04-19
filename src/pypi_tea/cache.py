@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -240,8 +241,12 @@ class Cache:
             pipe.sadd(f"efield:{entity_type}:name:{name}", uuid)
         await pipe.execute()
 
+    # Only these fields have efield: indexes populated by set_uuid_lookup
+    _INDEXED_FIELDS = frozenset({"name"})
+
     async def find_by_entity_type_and_field(self, entity_type: str, field: str, value: str) -> list[dict[str, Any]]:
-        # Use field index to avoid loading all entities of this type
+        if field not in self._INDEXED_FIELDS:
+            raise ValueError(f"Field {field!r} is not indexed; only {self._INDEXED_FIELDS} are supported")
         index_key = f"efield:{entity_type}:{field}:{value}"
         uuids: set[str] = await self._client.smembers(index_key)  # type: ignore[misc]
         if not uuids:
@@ -374,17 +379,17 @@ class Cache:
         result: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
         return result
 
-    async def get_packages_with_sbom(self, offset: int = 0, limit: int = 0) -> tuple[list[str], int]:
-        """Return sorted package@version strings from the SBOM set."""
+    async def get_packages_with_sbom(self, offset: int = 0, limit: int = 50) -> tuple[list[str], int]:
+        """Return sorted package@version strings from the SBOM set.
+
+        Use scan_packages_with_sbom() for unbounded iteration instead.
+        """
         total: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
         if total == 0:
             return [], 0
-        if limit > 0:
-            items: list[str] = await self._client.sort(  # type: ignore[misc]
-                UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit
-            )
-        else:
-            items = await self._client.sort(UNIQUE_PACKAGES_WITH_SBOM, alpha=True)  # type: ignore[misc]
+        items: list[str] = await self._client.sort(  # type: ignore[misc]
+            UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit
+        )
         return items, total
 
     async def get_packages_with_sbom_by_format(
@@ -393,7 +398,7 @@ class Cache:
         """Return packages filtered by SBOM format family (e.g. 'CycloneDX', 'SPDX')."""
         family_key = f"{FORMAT_PACKAGES_PREFIX}{format_family}"
         # Intersect server-side into a temporary key to avoid loading both sets
-        tmp_key = f"_tmp:fmt_intersect:{format_family}"
+        tmp_key = f"_tmp:fmt_intersect:{format_family}:{os.urandom(4).hex()}"
         pipe = self._client.pipeline()
         pipe.sinterstore(tmp_key, [family_key, UNIQUE_PACKAGES_WITH_SBOM])
         pipe.expire(tmp_key, 30)
