@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import redis.asyncio as redis
@@ -234,24 +235,28 @@ class Cache:
         version = data.get("version")
         if name and version:
             pipe.sadd(f"{PKG_ENTITIES_PREFIX}{name}@{version}:{entity_type}", uuid)
+        # Field index for efficient lookups by name (avoids full entity-type scans)
+        if name:
+            pipe.sadd(f"efield:{entity_type}:name:{name}", uuid)
         await pipe.execute()
 
     async def find_by_entity_type_and_field(self, entity_type: str, field: str, value: str) -> list[dict[str, Any]]:
-        uuids = await self._client.smembers(f"etype:{entity_type}")  # type: ignore[misc]
+        # Use field index to avoid loading all entities of this type
+        index_key = f"efield:{entity_type}:{field}:{value}"
+        uuids: set[str] = await self._client.smembers(index_key)  # type: ignore[misc]
         if not uuids:
             return []
-        results: list[dict[str, Any]] = []
         pipe = self._client.pipeline()
         uuid_list = sorted(uuids)
         for uuid in uuid_list:
             pipe.get(f"uuid:{uuid}")
         values = await pipe.execute()
+        results: list[dict[str, Any]] = []
         for uuid, raw in zip(uuid_list, values, strict=True):
             if raw is None:
                 continue
             data: dict[str, Any] = json.loads(raw)
-            if data.get(field) == value:
-                results.append({"uuid": uuid, **data})
+            results.append({"uuid": uuid, **data})
         return results
 
     async def find_by_package(self, entity_type: str, name: str, version: str) -> list[dict[str, Any]]:
@@ -280,11 +285,12 @@ class Cache:
     async def list_by_entity_type(
         self, entity_type: str, offset: int = 0, limit: int = 100
     ) -> tuple[list[dict[str, Any]], int]:
-        uuids = await self._client.smembers(f"etype:{entity_type}")  # type: ignore[misc]
-        total = len(uuids)
-        if not uuids:
+        set_key = f"etype:{entity_type}"
+        total: int = await self._client.scard(set_key)  # type: ignore[misc]
+        if total == 0:
             return [], 0
-        uuid_list = sorted(uuids)[offset : offset + limit]
+        # Server-side sort + pagination — only the requested slice crosses the wire
+        uuid_list: list[str] = await self._client.sort(set_key, alpha=True, start=offset, num=limit)  # type: ignore[misc]
         if not uuid_list:
             return [], total
         pipe = self._client.pipeline()
@@ -370,24 +376,44 @@ class Cache:
 
     async def get_packages_with_sbom(self, offset: int = 0, limit: int = 0) -> tuple[list[str], int]:
         """Return sorted package@version strings from the SBOM set."""
-        members: set[str] = await self._client.smembers(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
-        total = len(members)
-        items = sorted(members)
+        total: int = await self._client.scard(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
+        if total == 0:
+            return [], 0
         if limit > 0:
-            items = items[offset : offset + limit]
+            items: list[str] = await self._client.sort(  # type: ignore[misc]
+                UNIQUE_PACKAGES_WITH_SBOM, alpha=True, start=offset, num=limit
+            )
+        else:
+            items = await self._client.sort(UNIQUE_PACKAGES_WITH_SBOM, alpha=True)  # type: ignore[misc]
         return items, total
 
     async def get_packages_with_sbom_by_format(
         self, format_family: str, offset: int = 0, limit: int = 50
     ) -> tuple[list[str], int]:
         """Return packages filtered by SBOM format family (e.g. 'CycloneDX', 'SPDX')."""
-        # Intersect format index with packages-with-sbom to ensure consistency
-        family_members: set[str] = await self._client.smembers(f"{FORMAT_PACKAGES_PREFIX}{format_family}")  # type: ignore[misc]
-        sbom_members: set[str] = await self._client.smembers(UNIQUE_PACKAGES_WITH_SBOM)  # type: ignore[misc]
-        matched = sorted(family_members & sbom_members)
-        total = len(matched)
-        items = matched[offset : offset + limit]
+        family_key = f"{FORMAT_PACKAGES_PREFIX}{format_family}"
+        # Intersect server-side into a temporary key to avoid loading both sets
+        tmp_key = f"_tmp:fmt_intersect:{format_family}"
+        pipe = self._client.pipeline()
+        pipe.sinterstore(tmp_key, [family_key, UNIQUE_PACKAGES_WITH_SBOM])
+        pipe.expire(tmp_key, 30)
+        await pipe.execute()
+
+        total: int = await self._client.scard(tmp_key)  # type: ignore[misc]
+        if total == 0:
+            return [], 0
+        items: list[str] = await self._client.sort(tmp_key, alpha=True, start=offset, num=limit)  # type: ignore[misc]
         return items, total
+
+    async def scan_packages_with_sbom(self) -> AsyncIterator[str]:
+        """Yield package@version strings without loading the full set into memory."""
+        cursor: int = 0
+        while True:
+            cursor, members = await self._client.sscan(UNIQUE_PACKAGES_WITH_SBOM, cursor=cursor, count=500)
+            for m in members:
+                yield m
+            if cursor == 0:
+                break
 
     async def get_package_formats(self, package: str, version: str) -> list[str]:
         """Return SBOM format strings for a package (e.g. ['CycloneDX/1.6'])."""

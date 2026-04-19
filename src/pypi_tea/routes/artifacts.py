@@ -23,6 +23,7 @@ async def _lookup_artifact(uuid: str, cache: Cache) -> dict[str, Any] | None:
     return lookup
 
 
+@router.get("/artifact/{uuid}/latest")
 @router.get("/artifact/{uuid}")
 async def get_artifact(
     uuid: str,
