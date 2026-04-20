@@ -82,4 +82,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["pypi_tea.cache"]
-disable_error_code = ["misc"]  # redis.asyncio stubs return union types (Awaitable[T] | T)
+# redis.asyncio stubs type every command as Awaitable[T] | T, causing ~23 [misc]
+# errors on `await` calls.  Module-level suppress is intentional — inline ignores
+# on every redis call would be noisier and harder to maintain.
+disable_error_code = ["misc"]

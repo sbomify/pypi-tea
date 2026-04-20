@@ -263,26 +263,30 @@ class Cache:
                 data: dict[str, Any] = json.loads(raw)
                 results.append({"uuid": uuid, **data})
             return results
-        # Fallback: index not yet populated (pre-upgrade data). Scan the full
-        # entity-type set and filter client-side, populating the index as we go
-        # so subsequent calls use the fast path.
-        all_uuids: set[str] = await self._client.smembers(f"etype:{entity_type}")
-        if not all_uuids:
-            return []
-        pipe = self._client.pipeline()
-        all_uuid_list = sorted(all_uuids)
-        for uuid in all_uuid_list:
-            pipe.get(f"uuid:{uuid}")
-        values = await pipe.execute()
+        # Fallback: index not yet populated (pre-upgrade data). Use SSCAN to
+        # iterate in batches (avoids loading the full set into memory at once)
+        # and backfill the field index so subsequent calls use the fast path.
         results = []
         matched_uuids: list[str] = []
-        for uuid, raw in zip(all_uuid_list, values, strict=True):
-            if raw is None:
-                continue
-            data = json.loads(raw)
-            if data.get(field) == value:
-                results.append({"uuid": uuid, **data})
-                matched_uuids.append(uuid)
+        cursor: int = 0
+        etype_key = f"etype:{entity_type}"
+        while True:
+            cursor, batch = await self._client.sscan(etype_key, cursor=cursor, count=500)
+            if batch:
+                pipe = self._client.pipeline()
+                batch_list = sorted(batch)
+                for uuid in batch_list:
+                    pipe.get(f"uuid:{uuid}")
+                values = await pipe.execute()
+                for uuid, raw in zip(batch_list, values, strict=True):
+                    if raw is None:
+                        continue
+                    data = json.loads(raw)
+                    if data.get(field) == value:
+                        results.append({"uuid": uuid, **data})
+                        matched_uuids.append(uuid)
+            if cursor == 0:
+                break
         # Backfill the field index in one round-trip so subsequent calls use the fast path
         if matched_uuids:
             await self._client.sadd(index_key, *matched_uuids)
