@@ -275,14 +275,17 @@ class Cache:
             pipe.get(f"uuid:{uuid}")
         values = await pipe.execute()
         results = []
+        matched_uuids: list[str] = []
         for uuid, raw in zip(all_uuid_list, values, strict=True):
             if raw is None:
                 continue
             data = json.loads(raw)
             if data.get(field) == value:
                 results.append({"uuid": uuid, **data})
-                # Backfill the field index so we don't scan again
-                await self._client.sadd(index_key, uuid)
+                matched_uuids.append(uuid)
+        # Backfill the field index in one round-trip so subsequent calls use the fast path
+        if matched_uuids:
+            await self._client.sadd(index_key, *matched_uuids)
         return results
 
     async def find_by_package(self, entity_type: str, name: str, version: str) -> list[dict[str, Any]]:
@@ -418,18 +421,22 @@ class Cache:
         # Early-return if the format family has no entries (avoids creating temp keys for bogus values)
         if not await self._client.exists(family_key):
             return [], 0
-        # Intersect server-side into a temporary key to avoid loading both sets
+        # Intersect server-side into a temporary key to avoid loading both sets.
+        # TTL is a safety net; we explicitly delete the key after use to avoid churn.
         tmp_key = f"_tmp:fmt_intersect:{format_family}:{os.urandom(4).hex()}"
         pipe = self._client.pipeline()
         pipe.sinterstore(tmp_key, [family_key, UNIQUE_PACKAGES_WITH_SBOM])
         pipe.expire(tmp_key, 30)
         await pipe.execute()
 
-        total: int = await self._client.scard(tmp_key)
-        if total == 0:
-            return [], 0
-        items: list[str] = await self._client.sort(tmp_key, alpha=True, start=offset, num=limit)
-        return items, total
+        try:
+            total: int = await self._client.scard(tmp_key)
+            if total == 0:
+                return [], 0
+            items: list[str] = await self._client.sort(tmp_key, alpha=True, start=offset, num=limit)
+            return items, total
+        finally:
+            await self._client.delete(tmp_key)
 
     async def scan_packages_with_sbom(self) -> AsyncIterator[str]:
         """Yield package@version strings without loading the full set into memory."""

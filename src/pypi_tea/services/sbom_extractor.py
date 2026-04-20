@@ -28,13 +28,15 @@ _extraction_pool: concurrent.futures.ThreadPoolExecutor | None = None
 
 def init_pool() -> None:
     global _extraction_pool
+    if _extraction_pool is not None:
+        return
     _extraction_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="sbom-extract")
 
 
 def shutdown_pool() -> None:
     global _extraction_pool
     if _extraction_pool is not None:
-        _extraction_pool.shutdown(wait=False)
+        _extraction_pool.shutdown(wait=True, cancel_futures=True)
         _extraction_pool = None
 
 
