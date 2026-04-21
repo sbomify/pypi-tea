@@ -1,7 +1,9 @@
+from collections.abc import AsyncIterator
 from html import escape
 
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import PlainTextResponse
+from starlette.responses import StreamingResponse
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
@@ -16,34 +18,26 @@ def _url_entry(loc: str, priority: str, changefreq: str) -> str:
     return f"<url><loc>{escape(loc)}</loc><priority>{priority}</priority><changefreq>{changefreq}</changefreq></url>"
 
 
-@router.get("/sitemap.xml")
-async def sitemap(cache: Cache = Depends(get_cache)) -> Response:
-    items, _total = await cache.get_packages_with_sbom()
+async def _sitemap_xml(cache: Cache) -> AsyncIterator[str]:
+    """Stream sitemap XML using cursor-based SSCAN to avoid loading the full set."""
     root_url = settings.server_root_url.rstrip("/")
-
-    # Build XML incrementally as a list of strings to avoid ElementTree overhead
-    parts: list[str] = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        f'<urlset xmlns="{_SITEMAP_NS}">',
-    ]
-
-    # Static pages
-    parts.append(_url_entry(f"{root_url}/", "1.0", "daily"))
-    parts.append(_url_entry(f"{root_url}/packages", "0.8", "daily"))
-
-    # Package pages
-    for item in items:
+    yield '<?xml version="1.0" encoding="UTF-8"?>\n'
+    yield f'<urlset xmlns="{_SITEMAP_NS}">\n'
+    yield _url_entry(f"{root_url}/", "1.0", "daily") + "\n"
+    yield _url_entry(f"{root_url}/packages", "0.8", "daily") + "\n"
+    async for item in cache.scan_packages_with_sbom():
         split = item.rsplit("@", 1)
         if len(split) != 2:
             continue
         name, version = split
-        parts.append(_url_entry(f"{root_url}/package/{name}/{version}", "0.6", "weekly"))
+        yield _url_entry(f"{root_url}/package/{name}/{version}", "0.6", "weekly") + "\n"
+    yield "</urlset>\n"
 
-    parts.append("</urlset>")
-    xml_str = "\n".join(parts)
 
-    return Response(
-        content=xml_str,
+@router.get("/sitemap.xml")
+async def sitemap(cache: Cache = Depends(get_cache)) -> Response:
+    return StreamingResponse(
+        _sitemap_xml(cache),
         media_type="application/xml",
         headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import logging
 import tempfile
 import zipfile
@@ -18,9 +19,25 @@ USER_AGENT = "pypi-tea/0.1.0 (https://github.com/sbomify/pypi-tea)"
 # that loads the entire wheel into memory.
 MAX_FULL_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
-# Limit concurrent extractions to avoid memory pressure from multiple
-# large wheels being processed simultaneously.
-_extraction_semaphore = asyncio.Semaphore(3)
+# Bounded thread pool for SBOM extraction — limits both concurrency and
+# idle thread memory.  Replaces the default ThreadPoolExecutor (up to 32
+# threads) that asyncio.to_thread() would use.
+# Created/shutdown via init_pool() / shutdown_pool() called from the FastAPI lifespan.
+_extraction_pool: concurrent.futures.ThreadPoolExecutor | None = None
+
+
+def init_pool() -> None:
+    global _extraction_pool
+    if _extraction_pool is not None:
+        return
+    _extraction_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="sbom-extract")
+
+
+def shutdown_pool() -> None:
+    global _extraction_pool
+    if _extraction_pool is not None:
+        _extraction_pool.shutdown(wait=True, cancel_futures=True)
+        _extraction_pool = None
 
 
 @dataclass
@@ -81,5 +98,7 @@ def _extract_sboms_sync(wheel_url: str, wheel_size: int | None = None) -> list[S
 
 
 async def extract_sboms(wheel_url: str, wheel_size: int | None = None) -> list[SBOMFile]:
-    async with _extraction_semaphore:
-        return await asyncio.to_thread(_extract_sboms_sync, wheel_url, wheel_size)
+    if _extraction_pool is None:
+        raise RuntimeError("Extraction pool not initialised — call init_pool() first")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_extraction_pool, _extract_sboms_sync, wheel_url, wheel_size)
