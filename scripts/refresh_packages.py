@@ -41,6 +41,7 @@ import redis.asyncio as redis
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
 from pypi_tea.services.mapper import resolve_purl
+from pypi_tea.services.sbom_extractor import init_pool, shutdown_pool
 
 # Use simpler log format under systemd (journald adds timestamps)
 if os.environ.get("JOURNAL_STREAM"):
@@ -164,7 +165,8 @@ async def main() -> None:
 
     logger.info("Found %d unique packages (%d total versions)", len(package_names), len(all_entries))
 
-    # Set up HTTP client and cache
+    # Set up HTTP client, cache, and extraction pool
+    init_pool()
     cache = Cache(REDIS_URL)
     await cache.init()
 
@@ -193,6 +195,7 @@ async def main() -> None:
         results = await asyncio.gather(*tasks)
 
     await cache.close()
+    shutdown_pool()
 
     total_new = sum(r[0] for r in results)
     total_refreshed = sum(r[1] for r in results)
