@@ -1,6 +1,6 @@
 [project]
 name = "pypi-tea"
-version = "0.4.1"
+version = "0.5.0"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 license = "Apache-2.0"
@@ -79,3 +79,10 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 module = ["remotezip", "sentry_sdk", "pypi_attestations", "sigstore"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pypi_tea.cache"]
+# redis.asyncio stubs type every command as Awaitable[T] | T, causing ~23 [misc]
+# errors on `await` calls.  Module-level suppress is intentional — inline ignores
+# on every redis call would be noisier and harder to maintain.
+disable_error_code = ["misc"]
