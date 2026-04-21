@@ -1,6 +1,6 @@
 [project]
 name = "pypi-tea"
-version = "0.5.0"
+version = "0.5.1"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,6 +24,9 @@ dependencies = [
     "cryptography>=46.0.6",
     "requests>=2.33.1",
 ]
+
+[project.scripts]
+pypi-tea-refresh = "pypi_tea.refresh:cli"
 
 [build-system]
 requires = ["hatchling>=1.28.0"]

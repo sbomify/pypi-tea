@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 """Refresh all tracked packages: detect new versions and update cached data.
 
-This script:
+This module:
 1. Reads all known package@version pairs from Redis
 2. Queries PyPI for the latest version of each package
 3. If a newer version exists, resolves it via the normal pipeline (metadata, SBOMs, attestations)
 4. Optionally re-resolves existing versions to refresh expired caches
 
 Run periodically (e.g. weekly systemd timer):
-    uv run python scripts/refresh_packages.py --existing
+    python -m pypi_tea.refresh --existing
 
 Options:
     --existing       Also re-resolve existing versions (refresh expired caches)
@@ -32,15 +31,13 @@ import os
 import sys
 import time
 
-# Allow importing from the src directory
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 import httpx
 import redis.asyncio as redis
 
 from pypi_tea.cache import Cache
 from pypi_tea.config import settings
 from pypi_tea.services.mapper import resolve_purl
+from pypi_tea.services.sbom_extractor import init_pool, shutdown_pool
 
 # Use simpler log format under systemd (journald adds timestamps)
 if os.environ.get("JOURNAL_STREAM"):
@@ -63,7 +60,8 @@ async def get_latest_version(client: httpx.AsyncClient, package: str) -> str | N
             logger.warning("PyPI returned %d for %s", resp.status_code, package)
             return None
         data = resp.json()
-        return data.get("info", {}).get("version")
+        version: str | None = data.get("info", {}).get("version")
+        return version
     except httpx.HTTPError as e:
         logger.warning("Failed to fetch latest version for %s: %s", package, e)
         return None
@@ -146,7 +144,7 @@ async def main() -> None:
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
     # Get all tracked package@version pairs
-    all_entries: set[str] = await r.smembers("unique:packages")  # type: ignore[assignment]
+    all_entries: set[str] = await r.smembers("unique:packages")  # type: ignore[misc]
     await r.aclose()
 
     # Extract unique package names and their known versions
@@ -164,7 +162,8 @@ async def main() -> None:
 
     logger.info("Found %d unique packages (%d total versions)", len(package_names), len(all_entries))
 
-    # Set up HTTP client and cache
+    # Set up HTTP client, cache, and extraction pool
+    init_pool()
     cache = Cache(REDIS_URL)
     await cache.init()
 
@@ -193,6 +192,7 @@ async def main() -> None:
         results = await asyncio.gather(*tasks)
 
     await cache.close()
+    shutdown_pool()
 
     total_new = sum(r[0] for r in results)
     total_refreshed = sum(r[1] for r in results)
@@ -214,7 +214,7 @@ async def main() -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def cli() -> None:
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
@@ -222,3 +222,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical("Unexpected error: %s", e)
         sys.exit(2)
+
+
+if __name__ == "__main__":
+    cli()
