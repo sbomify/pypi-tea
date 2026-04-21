@@ -1,0 +1,25 @@
+[Unit]
+Description=pypi-tea weekly package rescan
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=oneshot
+User=pypi-tea
+Group=pypi-tea
+
+Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
+Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
+Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
+Environment=HOME=/tmp/pypi-tea
+
+ExecStart=/usr/local/bin/uvx --python 3.14 --from pypi-tea@latest python scripts/refresh_packages.py --existing --concurrency 5 --delay 1.0
+
+TimeoutStartSec=7200
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp/pypi-tea
+
+[Install]
+WantedBy=multi-user.target
