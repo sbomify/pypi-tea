@@ -25,6 +25,9 @@ dependencies = [
     "requests>=2.33.1",
 ]
 
+[project.scripts]
+pypi-tea-refresh = "pypi_tea.refresh:cli"
+
 [build-system]
 requires = ["hatchling>=1.28.0"]
 build-backend = "hatchling.build"

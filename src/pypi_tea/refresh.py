@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 """Refresh all tracked packages: detect new versions and update cached data.
 
-This script:
+This module:
 1. Reads all known package@version pairs from Redis
 2. Queries PyPI for the latest version of each package
 3. If a newer version exists, resolves it via the normal pipeline (metadata, SBOMs, attestations)
 4. Optionally re-resolves existing versions to refresh expired caches
 
 Run periodically (e.g. weekly systemd timer):
-    uv run python scripts/refresh_packages.py --existing
+    python -m pypi_tea.refresh --existing
 
 Options:
     --existing       Also re-resolve existing versions (refresh expired caches)
@@ -31,9 +30,6 @@ import logging
 import os
 import sys
 import time
-
-# Allow importing from the src directory
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import httpx
 import redis.asyncio as redis
@@ -217,7 +213,7 @@ async def main() -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def cli() -> None:
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
@@ -225,3 +221,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical("Unexpected error: %s", e)
         sys.exit(2)
+
+
+if __name__ == "__main__":
+    cli()
