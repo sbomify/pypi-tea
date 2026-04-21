@@ -60,7 +60,8 @@ async def get_latest_version(client: httpx.AsyncClient, package: str) -> str | N
             logger.warning("PyPI returned %d for %s", resp.status_code, package)
             return None
         data = resp.json()
-        return data.get("info", {}).get("version")
+        version: str | None = data.get("info", {}).get("version")
+        return version
     except httpx.HTTPError as e:
         logger.warning("Failed to fetch latest version for %s: %s", package, e)
         return None
@@ -143,7 +144,7 @@ async def main() -> None:
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
     # Get all tracked package@version pairs
-    all_entries: set[str] = await r.smembers("unique:packages")  # type: ignore[assignment]
+    all_entries: set[str] = await r.smembers("unique:packages")  # type: ignore[misc]
     await r.aclose()
 
     # Extract unique package names and their known versions
