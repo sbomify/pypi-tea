@@ -218,6 +218,11 @@ class Cache:
             pipe.expire(daily_sbom_key, STATS_RETENTION)
         await pipe.execute()
 
+    async def get_tracked_packages(self) -> set[str]:
+        """Return the full set of known package@version strings."""
+        members: set[str] = await self._client.smembers(UNIQUE_PACKAGES)
+        return members
+
     # --- UUID lookup ---
 
     async def get_uuid_lookup(self, uuid: str) -> dict[str, Any] | None:

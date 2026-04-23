@@ -1,11 +1,12 @@
 [project]
 name = "pypi-tea"
-version = "0.5.1"
+version = "0.6.0"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
+    "arq>=0.26",
     "cyclonedx-python-lib[json-validation]>=11.6.0",
     "fastapi>=0.115",
     "httpx>=0.27",
@@ -27,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 pypi-tea-refresh = "pypi_tea.refresh:cli"
+pypi-tea-worker = "pypi_tea.worker:cli"
 
 [build-system]
 requires = ["hatchling>=1.28.0"]
@@ -88,4 +90,5 @@ module = ["pypi_tea.cache"]
 # redis.asyncio stubs type every command as Awaitable[T] | T, causing ~23 [misc]
 # errors on `await` calls.  Module-level suppress is intentional — inline ignores
 # on every redis call would be noisier and harder to maintain.
-disable_error_code = ["misc"]
+# `no-untyped-call` covers redis.from_url under redis<6 stubs.
+disable_error_code = ["misc", "no-untyped-call"]
