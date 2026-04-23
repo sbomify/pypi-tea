@@ -21,15 +21,21 @@ fi
 mkdir -p /tmp/pypi-tea
 chown pypi-tea:pypi-tea /tmp/pypi-tea
 
-# Install systemd service
+# Install systemd services
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-echo "==> Installing systemd service"
+echo "==> Installing systemd services"
 cp "${SCRIPT_DIR}/pypi-tea.service" /etc/systemd/system/
+cp "${SCRIPT_DIR}/pypi-tea-worker.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable pypi-tea
+systemctl enable pypi-tea pypi-tea-worker
 
-echo "==> Done. Start with: systemctl start pypi-tea"
-echo "    Logs: journalctl -u pypi-tea -f"
+echo "==> Done. Start with:"
+echo "    systemctl start pypi-tea pypi-tea-worker"
+echo ""
+echo "    Logs:"
+echo "    journalctl -u pypi-tea -f"
+echo "    journalctl -u pypi-tea-worker -f"
 echo ""
 echo "    Configure via environment overrides:"
 echo "    systemctl edit pypi-tea"
+echo "    systemctl edit pypi-tea-worker"

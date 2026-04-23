@@ -218,6 +218,24 @@ class Cache:
             pipe.expire(daily_sbom_key, STATS_RETENTION)
         await pipe.execute()
 
+    async def scan_tracked_packages(self) -> AsyncIterator[str]:
+        """Yield package@version strings from unique:packages via SSCAN.
+
+        Avoids the single-reply buffer that SMEMBERS would allocate on large sets.
+        """
+        cursor: int = 0
+        while True:
+            cursor, members = await self._client.sscan(UNIQUE_PACKAGES, cursor=cursor, count=500)
+            for m in members:
+                yield m
+            if cursor == 0:
+                break
+
+    async def is_package_tracked(self, package: str, version: str) -> bool:
+        """Return True if package@version is already in the tracked-packages set."""
+        result: bool = await self._client.sismember(UNIQUE_PACKAGES, f"{package}@{version}")
+        return result
+
     # --- UUID lookup ---
 
     async def get_uuid_lookup(self, uuid: str) -> dict[str, Any] | None:
