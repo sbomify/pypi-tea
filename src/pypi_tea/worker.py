@@ -127,7 +127,15 @@ async def check_latest(ctx: dict[str, Any], name: str) -> str | None:
     if resp.status_code != 200:
         logger.warning("PyPI returned %d for %s", resp.status_code, name)
         return None
-    latest: str | None = resp.json().get("info", {}).get("version")
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        # JSONDecodeError is a subclass of ValueError — httpx may also wrap
+        # other decode failures the same way. Treat as non-transient so arq
+        # doesn't retry a broken response.
+        logger.warning("Invalid JSON from PyPI for %s: %s", name, e)
+        return None
+    latest: str | None = payload.get("info", {}).get("version") if isinstance(payload, dict) else None
     if not latest:
         return None
     if await cache.is_package_tracked(name, latest):
@@ -248,7 +256,13 @@ class WorkerSettings:
     max_jobs = MAX_JOBS
     job_timeout = 300  # 5 min per job — enough for a wheel SBOM extraction
     max_tries = 3
-    keep_result = 3600
+    # keep_result doubles as the dedupe window for deterministic _job_id: a job
+    # with a known id can't be re-enqueued until its result key expires.  Must
+    # comfortably cover the worst-case retry span (max_tries * job_timeout =
+    # 900s) so fan-out retries still dedupe children; kept a bit above that to
+    # absorb retry backoff.  Previously 3600 (1h), which silently blocked
+    # manual reruns for an hour after any prior refresh — now 1200 (20 min).
+    keep_result = 1200
 
 
 def cli() -> None:
