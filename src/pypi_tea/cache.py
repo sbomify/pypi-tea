@@ -231,6 +231,11 @@ class Cache:
             if cursor == 0:
                 break
 
+    async def is_package_tracked(self, package: str, version: str) -> bool:
+        """Return True if package@version is already in the tracked-packages set."""
+        result: bool = await self._client.sismember(UNIQUE_PACKAGES, f"{package}@{version}")
+        return result
+
     # --- UUID lookup ---
 
     async def get_uuid_lookup(self, uuid: str) -> dict[str, Any] | None:

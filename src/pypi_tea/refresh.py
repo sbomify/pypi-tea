@@ -11,8 +11,9 @@ Usage:
     pypi-tea-refresh --dry-run       # log what would be enqueued without enqueueing
 
 Exit codes:
-    0 - Job enqueued
-    2 - Unexpected error
+    0   - Job enqueued
+    2   - Unexpected error (e.g., Redis unavailable, unexpected arq state)
+    130 - Interrupted by SIGINT / Ctrl-C
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Jobs:
 - resolve_pkg_version(name, version): short-lived unit of work (one PURL resolution)
-- check_latest(name, known): query PyPI latest, enqueue resolve if new version
+- check_latest(name): query PyPI latest, enqueue resolve if new version (membership checked via Redis)
 - enqueue_refresh(existing=False, limit=0, dry_run=False): fan-out across all tracked packages
 - weekly_refresh(): cron wrapper that calls enqueue_refresh(existing=True)
 
@@ -43,7 +43,27 @@ logging.basicConfig(level=logging.INFO, format=log_format)
 logger = logging.getLogger("pypi_tea.worker")
 
 REDIS_URL = os.environ.get("PYPI_TEA_REDIS_URL", "redis://localhost:6379")
-MAX_JOBS = int(os.environ.get("PYPI_TEA_WORKER_MAX_JOBS", "5"))
+
+_DEFAULT_MAX_JOBS = 5
+
+
+def _parse_max_jobs() -> int:
+    """Parse PYPI_TEA_WORKER_MAX_JOBS defensively so a bad override doesn't take the worker down."""
+    raw = os.environ.get("PYPI_TEA_WORKER_MAX_JOBS")
+    if raw is None or raw == "":
+        return _DEFAULT_MAX_JOBS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid PYPI_TEA_WORKER_MAX_JOBS=%r, falling back to %d", raw, _DEFAULT_MAX_JOBS)
+        return _DEFAULT_MAX_JOBS
+    if value < 1:
+        logger.warning("PYPI_TEA_WORKER_MAX_JOBS=%d must be >= 1, falling back to %d", value, _DEFAULT_MAX_JOBS)
+        return _DEFAULT_MAX_JOBS
+    return value
+
+
+MAX_JOBS = _parse_max_jobs()
 
 # Max concurrent enqueue_job calls during fan-out.  Bounded by arq's Redis
 # pool; 50 keeps the fan-out job under ~20s for 100k entries without flooding
@@ -89,9 +109,15 @@ async def resolve_pkg_version(ctx: dict[str, Any], name: str, version: str) -> s
     return purl
 
 
-async def check_latest(ctx: dict[str, Any], name: str, known: list[str]) -> str | None:
-    """Query PyPI for the latest version; enqueue a resolve job if it's new."""
+async def check_latest(ctx: dict[str, Any], name: str) -> str | None:
+    """Query PyPI for the latest version; enqueue a resolve job if it's new.
+
+    "New" is determined via a single Redis SISMEMBER against `unique:packages`,
+    so the job payload stays O(1) regardless of how many versions are tracked
+    for this package.
+    """
     http: httpx.AsyncClient = ctx["http"]
+    cache: Cache = ctx["cache"]
     url = f"{settings.pypi_base_url}/pypi/{name}/json"
     try:
         resp = await http.get(url)
@@ -102,8 +128,9 @@ async def check_latest(ctx: dict[str, Any], name: str, known: list[str]) -> str 
         logger.warning("PyPI returned %d for %s", resp.status_code, name)
         return None
     latest: str | None = resp.json().get("info", {}).get("version")
-    known_set = set(known)
-    if not latest or latest in known_set:
+    if not latest:
+        return None
+    if await cache.is_package_tracked(name, latest):
         return None
     job = await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest, _job_id=_resolve_job_id(name, latest))
     if job is None:
@@ -137,17 +164,22 @@ async def enqueue_refresh(
     cache: Cache = ctx["cache"]
     redis: ArqRedis = ctx["redis"]
 
-    # Group versions per package — needed because check_latest takes the full
-    # known-version list, and SSCAN gives no guarantee that a package's
-    # versions arrive contiguously.
-    packages: dict[str, list[str]] = {}
+    # Group versions per package when `existing=True` (needed to emit one
+    # resolve job per known version).  When `existing=False` we only need the
+    # set of unique package names, so skip materialising the version lists.
+    # SSCAN gives no ordering guarantee, so grouping is required regardless of
+    # how we consume it downstream.
+    packages: dict[str, list[str]] | None = {} if existing else None
+    names_set: set[str] = set()
     async for entry in cache.scan_tracked_packages():
         name, sep, version = entry.rpartition("@")
         if not sep:
             continue
-        packages.setdefault(name, []).append(version)
+        names_set.add(name)
+        if packages is not None:
+            packages.setdefault(name, []).append(version)
 
-    names = sorted(packages.keys())
+    names = sorted(names_set)
     if limit > 0:
         names = names[:limit]
 
@@ -163,13 +195,12 @@ async def enqueue_refresh(
         buffer.clear()
 
     for name in names:
-        versions = packages[name]
-        buffer.append(("check_latest", (name, versions), _check_latest_job_id(name)))
+        buffer.append(("check_latest", (name,), _check_latest_job_id(name)))
         check_count += 1
         if len(buffer) >= _ENQUEUE_CONCURRENCY:
             await _flush()
-        if existing:
-            for version in versions:
+        if packages is not None:
+            for version in packages[name]:
                 buffer.append(("resolve_pkg_version", (name, version), _resolve_job_id(name, version)))
                 resolve_count += 1
                 # Flush inside the inner loop too — a single package with many
