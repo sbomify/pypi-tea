@@ -20,7 +20,6 @@ import asyncio
 import logging
 import os
 import sys
-from itertools import batched
 from typing import Any, ClassVar
 
 import httpx
@@ -105,8 +104,12 @@ async def check_latest(ctx: dict[str, Any], name: str, known: list[str]) -> str 
     latest: str | None = resp.json().get("info", {}).get("version")
     if not latest or latest in set(known):
         return None
-    await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest, _job_id=_resolve_job_id(name, latest))
-    logger.info("enqueued new version %s@%s", name, latest)
+    job = await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest, _job_id=_resolve_job_id(name, latest))
+    if job is None:
+        # resolve for this version is already in-queue or within keep_result; skip the noisy log
+        logger.debug("resolve already pending for %s@%s", name, latest)
+    else:
+        logger.info("enqueued new version %s@%s", name, latest)
     return latest
 
 
@@ -123,15 +126,19 @@ async def enqueue_refresh(
 ) -> dict[str, int]:
     """Fan-out job: enqueue one check_latest per package and (if existing) one resolve per known version.
 
-    Enqueues are chunked with asyncio.gather (see _ENQUEUE_CONCURRENCY) so the
-    fan-out stays well under job_timeout even on large sets.  Every enqueued
-    child carries a deterministic _job_id so if this job times out and is
-    retried, children already in-queue or in the result window are not
-    re-enqueued.
+    Iterates the tracked-packages set via SSCAN and flushes enqueues in batches
+    of `_ENQUEUE_CONCURRENCY` rather than materialising a full jobs list, so
+    memory stays bounded by the per-package version count plus one batch.
+    Every enqueued child carries a deterministic `_job_id` so if this job
+    times out and is retried, children already in-queue or in the result
+    window are not re-enqueued.
     """
     cache: Cache = ctx["cache"]
     redis: ArqRedis = ctx["redis"]
 
+    # Group versions per package — needed because check_latest takes the full
+    # known-version list, and SSCAN gives no guarantee that a package's
+    # versions arrive contiguously.
     packages: dict[str, list[str]] = {}
     async for entry in cache.scan_tracked_packages():
         name, sep, version = entry.rpartition("@")
@@ -143,17 +150,30 @@ async def enqueue_refresh(
     if limit > 0:
         names = names[:limit]
 
-    jobs: list[tuple[str, tuple[Any, ...], str]] = []
+    buffer: list[tuple[str, tuple[Any, ...], str]] = []
+    check_count = 0
+    resolve_count = 0
+
+    async def _flush() -> None:
+        if not buffer:
+            return
+        if not dry_run:
+            await _enqueue_batch(redis, buffer)
+        buffer.clear()
+
     for name in names:
         versions = packages[name]
-        jobs.append(("check_latest", (name, versions), _check_latest_job_id(name)))
+        buffer.append(("check_latest", (name, versions), _check_latest_job_id(name)))
+        check_count += 1
         if existing:
             for version in versions:
-                jobs.append(("resolve_pkg_version", (name, version), _resolve_job_id(name, version)))
+                buffer.append(("resolve_pkg_version", (name, version), _resolve_job_id(name, version)))
+                resolve_count += 1
+        if len(buffer) >= _ENQUEUE_CONCURRENCY:
+            await _flush()
+    await _flush()
 
     if dry_run:
-        check_count = sum(1 for fn, _, _ in jobs if fn == "check_latest")
-        resolve_count = sum(1 for fn, _, _ in jobs if fn == "resolve_pkg_version")
         logger.info(
             "[dry-run] would enqueue %d check_latest and %d resolve_pkg_version jobs (existing=%s, packages=%d)",
             check_count,
@@ -163,11 +183,6 @@ async def enqueue_refresh(
         )
         return {"checks": check_count, "resolves": resolve_count, "packages": len(names), "dry_run": 1}
 
-    for batch in batched(jobs, _ENQUEUE_CONCURRENCY, strict=False):
-        await _enqueue_batch(redis, list(batch))
-
-    check_count = sum(1 for fn, _, _ in jobs if fn == "check_latest")
-    resolve_count = sum(1 for fn, _, _ in jobs if fn == "resolve_pkg_version")
     logger.info(
         "enqueued %d check_latest and %d resolve_pkg_version jobs (existing=%s)",
         check_count,

@@ -54,8 +54,11 @@ async def main() -> None:
     finally:
         await pool.aclose()
 
+    # arq only returns None from enqueue_job when a deterministic _job_id
+    # collides with an in-queue / recently-completed job.  We don't pass one,
+    # so a None here indicates an unexpected arq/Redis state.
     if job is None:
-        logger.error("Failed to enqueue refresh job (duplicate job_id?)")
+        logger.error("Failed to enqueue refresh job (unexpected arq/Redis state)")
         sys.exit(2)
     logger.info(
         "Enqueued refresh job %s (existing=%s, limit=%d, dry_run=%s)",
@@ -71,8 +74,8 @@ def cli() -> None:
         asyncio.run(main())
     except KeyboardInterrupt:
         sys.exit(130)
-    except Exception as e:
-        logger.critical("Unexpected error: %s", e)
+    except Exception:
+        logger.exception("Unexpected error")
         sys.exit(2)
 
 
