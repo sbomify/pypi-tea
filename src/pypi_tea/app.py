@@ -49,6 +49,44 @@ async def _watchdog_loop(notifier: sdnotify.SystemdNotifier, interval: float) ->
         notifier.notify("WATCHDOG=1")
 
 
+def _maybe_start_watchdog(notifier: sdnotify.SystemdNotifier) -> asyncio.Task[None] | None:
+    """Start the watchdog ping task if sd_notify watchdog env vars are set and valid.
+
+    Returns the Task (so the caller can cancel it on shutdown), or None if the
+    watchdog is disabled — missing env vars, unparseable WATCHDOG_USEC, or a
+    WATCHDOG_PID that doesn't match the current process (sd_notify will ignore
+    pings from any other PID, so there's no point sending them).
+    """
+    raw_usec = os.environ.get("WATCHDOG_USEC", "0")
+    try:
+        watchdog_usec = int(raw_usec)
+    except ValueError:
+        logger.warning("Invalid WATCHDOG_USEC=%r; disabling systemd watchdog", raw_usec)
+        return None
+    if watchdog_usec <= 0:
+        return None
+
+    raw_pid = os.environ.get("WATCHDOG_PID")
+    if raw_pid:
+        try:
+            expected_pid = int(raw_pid)
+        except ValueError:
+            logger.warning("Invalid WATCHDOG_PID=%r; disabling systemd watchdog", raw_pid)
+            return None
+        if expected_pid != os.getpid():
+            logger.warning(
+                "WATCHDOG_PID=%d does not match current pid %d; disabling systemd watchdog",
+                expected_pid,
+                os.getpid(),
+            )
+            return None
+
+    interval = (watchdog_usec / 1_000_000) / 2
+    task = asyncio.create_task(_watchdog_loop(notifier, interval))
+    logger.info("systemd watchdog active, pinging every %.1fs", interval)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = httpx.AsyncClient(
@@ -61,18 +99,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _init_extraction_pool()
 
     # sd_notify wiring: only active when running under systemd with Type=notify.
-    # NOTIFY_SOCKET is set by systemd; WATCHDOG_USEC is set when WatchdogSec= is
-    # configured.  Ping at half-interval so a single skipped ping still has time
-    # to recover before systemd kills us.
+    # NOTIFY_SOCKET is set by systemd; WATCHDOG_USEC / WATCHDOG_PID are set when
+    # WatchdogSec= is configured.  _maybe_start_watchdog handles the pid-match
+    # and parse-error edge cases.
     watchdog_task: asyncio.Task[None] | None = None
     if os.environ.get("NOTIFY_SOCKET"):
         notifier = sdnotify.SystemdNotifier()
         notifier.notify("READY=1")
-        watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
-        if watchdog_usec > 0:
-            interval = (watchdog_usec / 1_000_000) / 2
-            watchdog_task = asyncio.create_task(_watchdog_loop(notifier, interval))
-            logger.info("systemd watchdog active, pinging every %.1fs", interval)
+        watchdog_task = _maybe_start_watchdog(notifier)
 
     try:
         yield
