@@ -3,7 +3,7 @@
 Jobs:
 - resolve_pkg_version(name, version): short-lived unit of work (one PURL resolution)
 - check_latest(name, known): query PyPI latest, enqueue resolve if new version
-- enqueue_refresh(existing=False, limit=0): fan-out across all tracked packages
+- enqueue_refresh(existing=False, limit=0, dry_run=False): fan-out across all tracked packages
 - weekly_refresh(): cron wrapper that calls enqueue_refresh(existing=True)
 
 Run with:
@@ -16,14 +16,16 @@ Configuration via env vars:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
+from itertools import batched
 from typing import Any, ClassVar
 
 import httpx
 from arq import cron, run_worker
-from arq.connections import RedisSettings
+from arq.connections import ArqRedis, RedisSettings
 from arq.cron import CronJob
 from arq.typing import WorkerCoroutine
 
@@ -43,6 +45,19 @@ logger = logging.getLogger("pypi_tea.worker")
 
 REDIS_URL = os.environ.get("PYPI_TEA_REDIS_URL", "redis://localhost:6379")
 MAX_JOBS = int(os.environ.get("PYPI_TEA_WORKER_MAX_JOBS", "5"))
+
+# Max concurrent enqueue_job calls during fan-out.  Bounded by arq's Redis
+# pool; 50 keeps the fan-out job under ~20s for 100k entries without flooding
+# the pool.
+_ENQUEUE_CONCURRENCY = 50
+
+
+def _resolve_job_id(name: str, version: str) -> str:
+    return f"resolve:{name}@{version}"
+
+
+def _check_latest_job_id(name: str) -> str:
+    return f"check_latest:{name}"
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -90,19 +105,35 @@ async def check_latest(ctx: dict[str, Any], name: str, known: list[str]) -> str 
     latest: str | None = resp.json().get("info", {}).get("version")
     if not latest or latest in set(known):
         return None
-    await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest)
+    await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest, _job_id=_resolve_job_id(name, latest))
     logger.info("enqueued new version %s@%s", name, latest)
     return latest
 
 
-async def enqueue_refresh(ctx: dict[str, Any], existing: bool = False, limit: int = 0) -> dict[str, int]:
-    """Fan-out job: enqueue one check_latest per package and (if existing) one resolve per known version."""
-    cache: Cache = ctx["cache"]
-    redis = ctx["redis"]
+async def _enqueue_batch(redis: ArqRedis, jobs: list[tuple[str, tuple[Any, ...], str]]) -> None:
+    """Concurrently enqueue a batch of (function, args, job_id) tuples."""
+    await asyncio.gather(*(redis.enqueue_job(fn, *args, _job_id=job_id) for fn, args, job_id in jobs))
 
-    entries = await cache.get_tracked_packages()
+
+async def enqueue_refresh(
+    ctx: dict[str, Any],
+    existing: bool = False,
+    limit: int = 0,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Fan-out job: enqueue one check_latest per package and (if existing) one resolve per known version.
+
+    Enqueues are chunked with asyncio.gather (see _ENQUEUE_CONCURRENCY) so the
+    fan-out stays well under job_timeout even on large sets.  Every enqueued
+    child carries a deterministic _job_id so if this job times out and is
+    retried, children already in-queue or in the result window are not
+    re-enqueued.
+    """
+    cache: Cache = ctx["cache"]
+    redis: ArqRedis = ctx["redis"]
+
     packages: dict[str, list[str]] = {}
-    for entry in entries:
+    async for entry in cache.scan_tracked_packages():
         name, sep, version = entry.rpartition("@")
         if not sep:
             continue
@@ -112,17 +143,31 @@ async def enqueue_refresh(ctx: dict[str, Any], existing: bool = False, limit: in
     if limit > 0:
         names = names[:limit]
 
-    check_count = 0
-    resolve_count = 0
+    jobs: list[tuple[str, tuple[Any, ...], str]] = []
     for name in names:
         versions = packages[name]
-        await redis.enqueue_job("check_latest", name, versions)
-        check_count += 1
+        jobs.append(("check_latest", (name, versions), _check_latest_job_id(name)))
         if existing:
             for version in versions:
-                await redis.enqueue_job("resolve_pkg_version", name, version)
-                resolve_count += 1
+                jobs.append(("resolve_pkg_version", (name, version), _resolve_job_id(name, version)))
 
+    if dry_run:
+        check_count = sum(1 for fn, _, _ in jobs if fn == "check_latest")
+        resolve_count = sum(1 for fn, _, _ in jobs if fn == "resolve_pkg_version")
+        logger.info(
+            "[dry-run] would enqueue %d check_latest and %d resolve_pkg_version jobs (existing=%s, packages=%d)",
+            check_count,
+            resolve_count,
+            existing,
+            len(names),
+        )
+        return {"checks": check_count, "resolves": resolve_count, "packages": len(names), "dry_run": 1}
+
+    for batch in batched(jobs, _ENQUEUE_CONCURRENCY, strict=False):
+        await _enqueue_batch(redis, list(batch))
+
+    check_count = sum(1 for fn, _, _ in jobs if fn == "check_latest")
+    resolve_count = sum(1 for fn, _, _ in jobs if fn == "resolve_pkg_version")
     logger.info(
         "enqueued %d check_latest and %d resolve_pkg_version jobs (existing=%s)",
         check_count,

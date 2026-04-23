@@ -8,6 +8,7 @@ Usage:
     pypi-tea-refresh                 # enqueue new-version detection only
     pypi-tea-refresh --existing      # also re-resolve every known version
     pypi-tea-refresh --limit 100     # cap number of packages (useful for testing)
+    pypi-tea-refresh --dry-run       # log what would be enqueued without enqueueing
 
 Exit codes:
     0 - Job enqueued
@@ -35,18 +36,34 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Enqueue a pypi-tea refresh job")
     parser.add_argument("--existing", action="store_true", help="Also re-resolve existing versions")
     parser.add_argument("--limit", type=int, default=0, help="Limit number of packages to process")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log what the fan-out would enqueue without actually enqueueing",
+    )
     args = parser.parse_args()
 
     pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
     try:
-        job = await pool.enqueue_job("enqueue_refresh", existing=args.existing, limit=args.limit)
+        job = await pool.enqueue_job(
+            "enqueue_refresh",
+            existing=args.existing,
+            limit=args.limit,
+            dry_run=args.dry_run,
+        )
     finally:
         await pool.aclose()
 
     if job is None:
         logger.error("Failed to enqueue refresh job (duplicate job_id?)")
         sys.exit(2)
-    logger.info("Enqueued refresh job %s (existing=%s, limit=%d)", job.job_id, args.existing, args.limit)
+    logger.info(
+        "Enqueued refresh job %s (existing=%s, limit=%d, dry_run=%s)",
+        job.job_id,
+        args.existing,
+        args.limit,
+        args.dry_run,
+    )
 
 
 def cli() -> None:
