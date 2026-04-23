@@ -102,7 +102,8 @@ async def check_latest(ctx: dict[str, Any], name: str, known: list[str]) -> str 
         logger.warning("PyPI returned %d for %s", resp.status_code, name)
         return None
     latest: str | None = resp.json().get("info", {}).get("version")
-    if not latest or latest in set(known):
+    known_set = set(known)
+    if not latest or latest in known_set:
         return None
     job = await ctx["redis"].enqueue_job("resolve_pkg_version", name, latest, _job_id=_resolve_job_id(name, latest))
     if job is None:
@@ -165,12 +166,17 @@ async def enqueue_refresh(
         versions = packages[name]
         buffer.append(("check_latest", (name, versions), _check_latest_job_id(name)))
         check_count += 1
+        if len(buffer) >= _ENQUEUE_CONCURRENCY:
+            await _flush()
         if existing:
             for version in versions:
                 buffer.append(("resolve_pkg_version", (name, version), _resolve_job_id(name, version)))
                 resolve_count += 1
-        if len(buffer) >= _ENQUEUE_CONCURRENCY:
-            await _flush()
+                # Flush inside the inner loop too — a single package with many
+                # tracked versions could otherwise grow `buffer` well past
+                # `_ENQUEUE_CONCURRENCY` before the per-package check fires.
+                if len(buffer) >= _ENQUEUE_CONCURRENCY:
+                    await _flush()
     await _flush()
 
     if dry_run:
