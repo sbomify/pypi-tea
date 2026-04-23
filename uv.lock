@@ -931,7 +931,7 @@ wheels = [
 
 [[package]]
 name = "pypi-tea"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "arq" },
@@ -949,6 +949,7 @@ dependencies = [
     { name = "redis", extra = ["hiredis"] },
     { name = "remotezip" },
     { name = "requests" },
+    { name = "sdnotify" },
     { name = "sentry-sdk", extra = ["fastapi"] },
     { name = "spdx-tools" },
     { name = "uvicorn", extra = ["standard"] },
@@ -980,6 +981,7 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
     { name = "remotezip", specifier = ">=0.12" },
     { name = "requests", specifier = ">=2.33.1" },
+    { name = "sdnotify", specifier = ">=0.3.2" },
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0" },
     { name = "spdx-tools", specifier = ">=0.8.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -1274,6 +1276,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4c/56/5c7084299bd2cacaa07ae63a91c6f4ba66edc08bf28f356b24f6b717c799/ruff-0.15.9-py3-none-win_amd64.whl", hash = "sha256:45a70921b80e1c10cf0b734ef09421f71b5aa11d27404edc89d7e8a69505e43d", size = 11744969, upload-time = "2026-04-02T18:16:59.611Z" },
     { url = "https://files.pythonhosted.org/packages/03/36/76704c4f312257d6dbaae3c959add2a622f63fcca9d864659ce6d8d97d3d/ruff-0.15.9-py3-none-win_arm64.whl", hash = "sha256:0694e601c028fd97dc5c6ee244675bc241aeefced7ef80cd9c6935a871078f53", size = 11005870, upload-time = "2026-04-02T18:17:15.773Z" },
 ]
+
+[[package]]
+name = "sdnotify"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/d8/9fdc36b2a912bf78106de4b3f0de3891ff8f369e7a6f80be842b8b0b6bd5/sdnotify-0.3.2.tar.gz", hash = "sha256:73977fc746b36cc41184dd43c3fe81323e7b8b06c2bb0826c4f59a20c56bb9f1", size = 2459, upload-time = "2017-08-02T20:03:44.395Z" }
 
 [[package]]
 name = "securesystemslib"

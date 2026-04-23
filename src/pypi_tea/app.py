@@ -1,11 +1,14 @@
+import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 import httpx
+import sdnotify
 import sentry_sdk
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
@@ -34,7 +37,54 @@ sentry_sdk.init(
     release=version("pypi-tea"),
 )
 
+logger = logging.getLogger("pypi_tea.app")
+
 _STATIC_DIR = Path(__file__).parent / "static"
+
+
+async def _watchdog_loop(notifier: sdnotify.SystemdNotifier, interval: float) -> None:
+    """Ping systemd's watchdog; if the event loop hangs, the ping stops and systemd restarts us."""
+    while True:
+        await asyncio.sleep(interval)
+        notifier.notify("WATCHDOG=1")
+
+
+def _maybe_start_watchdog(notifier: sdnotify.SystemdNotifier) -> asyncio.Task[None] | None:
+    """Start the watchdog ping task if sd_notify watchdog env vars are set and valid.
+
+    Returns the Task (so the caller can cancel it on shutdown), or None if the
+    watchdog is disabled — missing env vars, unparseable WATCHDOG_USEC, or a
+    WATCHDOG_PID that doesn't match the current process (sd_notify will ignore
+    pings from any other PID, so there's no point sending them).
+    """
+    raw_usec = os.environ.get("WATCHDOG_USEC", "0")
+    try:
+        watchdog_usec = int(raw_usec)
+    except ValueError:
+        logger.warning("Invalid WATCHDOG_USEC=%r; disabling systemd watchdog", raw_usec)
+        return None
+    if watchdog_usec <= 0:
+        return None
+
+    raw_pid = os.environ.get("WATCHDOG_PID")
+    if raw_pid:
+        try:
+            expected_pid = int(raw_pid)
+        except ValueError:
+            logger.warning("Invalid WATCHDOG_PID=%r; disabling systemd watchdog", raw_pid)
+            return None
+        if expected_pid != os.getpid():
+            logger.warning(
+                "WATCHDOG_PID=%d does not match current pid %d; disabling systemd watchdog",
+                expected_pid,
+                os.getpid(),
+            )
+            return None
+
+    interval = (watchdog_usec / 1_000_000) / 2
+    task = asyncio.create_task(_watchdog_loop(notifier, interval))
+    logger.info("systemd watchdog active, pinging every %.1fs", interval)
+    return task
 
 
 @asynccontextmanager
@@ -47,10 +97,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.cache = Cache(settings.redis_url)
     await app.state.cache.init()
     _init_extraction_pool()
-    yield
-    _shutdown_extraction_pool()
-    await app.state.http_client.aclose()
-    await app.state.cache.close()
+
+    # sd_notify wiring: only active when running under systemd with Type=notify.
+    # NOTIFY_SOCKET is set by systemd; WATCHDOG_USEC / WATCHDOG_PID are set when
+    # WatchdogSec= is configured.  _maybe_start_watchdog handles the pid-match
+    # and parse-error edge cases.
+    watchdog_task: asyncio.Task[None] | None = None
+    if os.environ.get("NOTIFY_SOCKET"):
+        notifier = sdnotify.SystemdNotifier()
+        notifier.notify("READY=1")
+        watchdog_task = _maybe_start_watchdog(notifier)
+
+    try:
+        yield
+    finally:
+        if watchdog_task is not None:
+            watchdog_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await watchdog_task
+        _shutdown_extraction_pool()
+        await app.state.http_client.aclose()
+        await app.state.cache.close()
 
 
 app = FastAPI(title="pypi-tea - TEA Server for PyPI SBOMs", lifespan=lifespan)

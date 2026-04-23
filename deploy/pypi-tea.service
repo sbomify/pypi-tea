@@ -2,9 +2,17 @@
 Description=pypi-tea - TEA Server for PyPI Package SBOMs
 After=network.target redis.service
 Wants=redis.service
+# Tolerate a genuinely broken service flapping for ~10min before giving up
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
-Type=exec
+# Type=notify: app signals READY=1 from its lifespan startup and pings WATCHDOG=1
+# at roughly half the configured WatchdogSec interval.  A stuck event loop stops
+# the pings and systemd kills + restarts the service.
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
 User=pypi-tea
 Group=pypi-tea
 
