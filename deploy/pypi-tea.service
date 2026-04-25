@@ -11,7 +11,7 @@ StartLimitBurst=10
 # at roughly half the configured WatchdogSec interval.  A stuck event loop stops
 # the pings and systemd kills + restarts the service.
 Type=notify
-NotifyAccess=main
+NotifyAccess=all
 WatchdogSec=30s
 User=pypi-tea
 Group=pypi-tea

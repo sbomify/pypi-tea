@@ -66,20 +66,10 @@ def _maybe_start_watchdog(notifier: sdnotify.SystemdNotifier) -> asyncio.Task[No
     if watchdog_usec <= 0:
         return None
 
-    raw_pid = os.environ.get("WATCHDOG_PID")
-    if raw_pid:
-        try:
-            expected_pid = int(raw_pid)
-        except ValueError:
-            logger.warning("Invalid WATCHDOG_PID=%r; disabling systemd watchdog", raw_pid)
-            return None
-        if expected_pid != os.getpid():
-            logger.warning(
-                "WATCHDOG_PID=%d does not match current pid %d; disabling systemd watchdog",
-                expected_pid,
-                os.getpid(),
-            )
-            return None
+    # Note: we intentionally skip the WATCHDOG_PID check.  When running behind
+    # a wrapper like uvx the main PID belongs to the wrapper, not to this
+    # Python process.  The systemd unit uses NotifyAccess=all so the kernel
+    # allows sd_notify from any process in the cgroup.
 
     interval = (watchdog_usec / 1_000_000) / 2
     task = asyncio.create_task(_watchdog_loop(notifier, interval))
