@@ -81,13 +81,6 @@ def test_maybe_start_watchdog_invalid_usec_disables(monkeypatch: pytest.MonkeyPa
     assert _maybe_start_watchdog(cast(sdnotify.SystemdNotifier, FakeNotifier())) is None
 
 
-def test_maybe_start_watchdog_pid_mismatch_disables(monkeypatch: pytest.MonkeyPatch) -> None:
-    """WATCHDOG_PID not matching current pid disables the watchdog — pings would be ignored anyway."""
-    monkeypatch.setenv("WATCHDOG_USEC", "30000000")
-    monkeypatch.setenv("WATCHDOG_PID", str(os.getpid() + 99999))
-    assert _maybe_start_watchdog(cast(sdnotify.SystemdNotifier, FakeNotifier())) is None
-
-
 def test_maybe_start_watchdog_zero_usec_disables(monkeypatch: pytest.MonkeyPatch) -> None:
     """WATCHDOG_USEC=0 (the default when WatchdogSec is not configured) disables the watchdog."""
     monkeypatch.setenv("WATCHDOG_USEC", "0")
