@@ -50,7 +50,7 @@ jobs:
       - name: Generate SBOM (PEP 770)
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
+          OIDC_AUDIENCE: stage.sbomify.com
           API_BASE_URL: 'https://stage.sbomify.com'
           COMPONENT_ID: 'GqOHskUyBcUR'
           COMPONENT_NAME: 'pypi-tea'
@@ -98,7 +98,7 @@ jobs:
       - name: Generate SBOM (PEP 770)
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          OIDC_AUDIENCE: sbomify.com
           COMPONENT_ID: 'e0O7yCDijhp7'
           COMPONENT_NAME: 'pypi-tea'
           COMPONENT_VERSION: ${{ github.event.release.tag_name }}
