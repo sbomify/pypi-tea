@@ -4,11 +4,15 @@ set -euo pipefail
 # Install pypi-tea systemd service.
 # Run as root.
 
-# Install uv if not present
-if ! command -v uv &>/dev/null; then
-    echo "==> Installing uv"
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    cp ~/.local/bin/uv /usr/local/bin/uv
+# Install uv, or upgrade it if it's older than UV_MIN_VERSION. uv < 0.13.4
+# still trusts the compromised emSign CAs, and the service fetches
+# pypi-tea@latest through uvx on every start.
+UV_MIN_VERSION="0.13.4"
+uv_current="$(uv --version 2>/dev/null | awk '{print $2}' || true)"
+if [ -z "$uv_current" ] || [ "$(printf '%s\n%s\n' "$UV_MIN_VERSION" "$uv_current" | sort -V | head -n1)" != "$UV_MIN_VERSION" ]; then
+    echo "==> Installing uv ${UV_MIN_VERSION} (found: ${uv_current:-none})"
+    curl -LsSf "https://astral.sh/uv/${UV_MIN_VERSION}/install.sh" | sh
+    cp ~/.local/bin/uv ~/.local/bin/uvx /usr/local/bin/
 fi
 
 # Create dedicated service user (no home dir, no login)
