@@ -1,41 +1,31 @@
 [Unit]
-Description=pypi-tea - TEA Server for PyPI Package SBOMs
-After=network.target redis.service
-Wants=redis.service
-# Tolerate a genuinely broken service flapping for ~10min before giving up
+Description=pypi-tea - TEA Server for PyPI Package SBOMs (API)
+After=network.target
 StartLimitIntervalSec=600
 StartLimitBurst=10
 
 [Service]
-# Type=notify: app signals READY=1 from its lifespan startup and pings WATCHDOG=1
-# at roughly half the configured WatchdogSec interval.  A stuck event loop stops
-# the pings and systemd kills + restarts the service.
-Type=notify
-NotifyAccess=all
-WatchdogSec=30s
+Type=exec
 User=pypi-tea
 Group=pypi-tea
+EnvironmentFile=-/etc/default/pypi-tea
+Environment=PYPI_TEA_DATABASE_PATH=/var/lib/pypi-tea/pypi-tea.db
+Environment=PYPI_TEA_BIND=127.0.0.1:8000
+StateDirectory=pypi-tea
 
-# App configuration
-Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
-Environment=PYPI_TEA_SERVER_ROOT_URL=http://localhost:8000
+# Gunicorn supervises one uvicorn worker per CPU, each on its own SO_REUSEPORT
+# socket, and replaces any worker whose event loop stops responding.
+ExecStart=/opt/pypi-tea/bin/pypi-tea-serve
 
-# uvx needs writable dirs for cache and tool installs
-Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
-Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
-Environment=HOME=/tmp/pypi-tea
+Restart=always
+RestartSec=2
+MemoryHigh=3G
+MemoryMax=4G
 
-ExecStart=/usr/local/bin/uvx --python 3.14 --from pypi-tea@latest python -m uvicorn pypi_tea.app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --limit-max-requests 5000
-
-Restart=on-failure
-RestartSec=5
-MemoryMax=2G
-
-# Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp/pypi-tea
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

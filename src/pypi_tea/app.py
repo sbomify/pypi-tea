@@ -1,130 +1,91 @@
 import asyncio
 import logging
 import os
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-import httpx
-import sdnotify
 import sentry_sdk
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from pypi_tea.cache import Cache
+from pypi_tea import db
 from pypi_tea.config import settings
-from pypi_tea.routes import (
-    artifacts,
-    attestation,
-    component_releases,
-    components,
-    discovery,
-    pages,
-    product_releases,
-    products,
-    seo,
-    stats,
-)
-from pypi_tea.services.sbom_extractor import init_pool as _init_extraction_pool
-from pypi_tea.services.sbom_extractor import shutdown_pool as _shutdown_extraction_pool
+from pypi_tea.lookup import Overloaded, Pending, read
+from pypi_tea.routes import pages, seo, stats, tea
+from pypi_tea.usage import FLUSH_SECONDS, usage
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
-    send_default_pii=True,
-    traces_sample_rate=0.1,
+    send_default_pii=False,
+    traces_sample_rate=0.01,
     release=version("pypi-tea"),
 )
 
 logger = logging.getLogger("pypi_tea.app")
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_INDEX_HTML = (_STATIC_DIR / "index.html").read_text().replace("{{VERSION}}", version("pypi-tea"))
 
 
-async def _watchdog_loop(notifier: sdnotify.SystemdNotifier, interval: float) -> None:
-    """Ping systemd's watchdog; if the event loop hangs, the ping stops and systemd restarts us."""
+async def _flush_usage_forever() -> None:
     while True:
-        await asyncio.sleep(interval)
-        notifier.notify("WATCHDOG=1")
-
-
-def _maybe_start_watchdog(notifier: sdnotify.SystemdNotifier) -> asyncio.Task[None] | None:
-    """Start the watchdog ping task if sd_notify watchdog env vars are set and valid.
-
-    Returns the Task (so the caller can cancel it on shutdown), or None if the
-    watchdog is disabled — missing env vars, unparseable WATCHDOG_USEC, or a
-    WATCHDOG_PID that doesn't match the current process (sd_notify will ignore
-    pings from any other PID, so there's no point sending them).
-    """
-    raw_usec = os.environ.get("WATCHDOG_USEC", "0")
-    try:
-        watchdog_usec = int(raw_usec)
-    except ValueError:
-        logger.warning("Invalid WATCHDOG_USEC=%r; disabling systemd watchdog", raw_usec)
-        return None
-    if watchdog_usec <= 0:
-        return None
-
-    # Note: we intentionally skip the WATCHDOG_PID check.  When running behind
-    # a wrapper like uvx the main PID belongs to the wrapper, not to this
-    # Python process.  The systemd unit uses NotifyAccess=all so the kernel
-    # allows sd_notify from any process in the cgroup.
-
-    interval = (watchdog_usec / 1_000_000) / 2
-    task = asyncio.create_task(_watchdog_loop(notifier, interval))
-    logger.info("systemd watchdog active, pinging every %.1fs", interval)
-    return task
+        await asyncio.sleep(FLUSH_SECONDS)
+        try:
+            await asyncio.to_thread(usage.flush)
+        except Exception:
+            logger.exception("usage flush failed")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.http_client = httpx.AsyncClient(
-        timeout=30.0,
-        limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
-        headers={"User-Agent": f"pypi-tea/{version('pypi-tea')} (https://github.com/sbomify/pypi-tea)"},
-    )
-    app.state.cache = Cache(settings.redis_url)
-    await app.state.cache.init()
-    _init_extraction_pool()
+    db.init_schema(settings.database_path)
+    background: list[asyncio.Task[None]] = [asyncio.create_task(_flush_usage_forever())]
+    stop = asyncio.Event()
+    if settings.embedded_worker:
+        from pypi_tea import worker
 
-    # sd_notify wiring: only active when running under systemd with Type=notify.
-    # NOTIFY_SOCKET is set by systemd; WATCHDOG_USEC / WATCHDOG_PID are set when
-    # WatchdogSec= is configured.  _maybe_start_watchdog handles the pid-match
-    # and parse-error edge cases.
-    watchdog_task: asyncio.Task[None] | None = None
-    if os.environ.get("NOTIFY_SOCKET"):
-        notifier = sdnotify.SystemdNotifier()
-        notifier.notify("READY=1")
-        watchdog_task = _maybe_start_watchdog(notifier)
-
+        background.append(asyncio.create_task(worker.run(stop)))
     try:
         yield
     finally:
-        if watchdog_task is not None:
-            watchdog_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await watchdog_task
-        _shutdown_extraction_pool()
-        await app.state.http_client.aclose()
-        await app.state.cache.close()
+        stop.set()
+        for task in background:
+            task.cancel()
+        for task in background:
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        with suppress(Exception):
+            await asyncio.to_thread(usage.flush)
 
 
 app = FastAPI(title="pypi-tea - TEA Server for PyPI SBOMs", lifespan=lifespan)
 
-app.include_router(discovery.router)
-app.include_router(products.router)
-app.include_router(product_releases.router)
-app.include_router(components.router)
-app.include_router(component_releases.router)
-app.include_router(artifacts.router)
-app.include_router(stats.router)
-app.include_router(attestation.router)
-app.include_router(pages.router)
-app.include_router(seo.router)
+
+@app.exception_handler(Overloaded)
+async def _overloaded(_request: Request, _exc: Overloaded) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Too many lookups in progress, retry later"},
+        headers={"Retry-After": "30", "Cache-Control": "no-store"},
+    )
+
+
+@app.exception_handler(Pending)
+async def _pending(_request: Request, _exc: Pending) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Release is being indexed, retry shortly"},
+        headers={"Retry-After": "5", "Cache-Control": "no-store"},
+    )
+
 
 # TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
-# after probing /.well-known/tea, so mount API routes under the version prefix too.
+# after probing /.well-known/tea, so the API is mounted under the version prefix too.
 _version_prefix = f"/v{settings.tea_spec_version}"
 
 
@@ -135,60 +96,105 @@ async def version_root() -> dict[str, str]:
     return {"version": settings.tea_spec_version}
 
 
-app.include_router(discovery.router, prefix=_version_prefix)
-app.include_router(products.router, prefix=_version_prefix)
-app.include_router(product_releases.router, prefix=_version_prefix)
-app.include_router(components.router, prefix=_version_prefix)
-app.include_router(component_releases.router, prefix=_version_prefix)
-app.include_router(artifacts.router, prefix=_version_prefix)
+app.include_router(tea.router)
+app.include_router(tea.router, prefix=_version_prefix)
+app.include_router(stats.router)
 app.include_router(stats.router, prefix=_version_prefix)
-app.include_router(attestation.router, prefix=_version_prefix)
-
-# Cache headers for Cloudflare: TEA data is derived from immutable wheels
-# and cached in Redis, so responses can be cached at the edge.
-_CACHE_RULES: dict[str, str] = {
-    "/artifact/": "public, max-age=86400, s-maxage=86400",  # SBOMs from immutable wheels
-    "/component": "public, max-age=86400, s-maxage=86400",
-    "/product": "public, max-age=3600, s-maxage=3600",  # Shorter — new versions may appear
-    "/discovery": "public, max-age=3600, s-maxage=3600",
-    "/.well-known/tea": "public, max-age=3600, s-maxage=3600",
-    "/stats": "public, max-age=60, s-maxage=60",  # Stats change frequently
-    "/package/": "public, max-age=3600, s-maxage=3600",
-    "/packages": "public, max-age=300, s-maxage=300",
-    "/sitemap": "public, max-age=3600, s-maxage=3600",
-}
-
-
-# TEA endpoint prefixes to track (after stripping version prefix)
-_TEA_ENDPOINTS = ("/discovery", "/products", "/product", "/componentRelease", "/component", "/artifact")
-
-
-@app.middleware("http")
-async def add_cache_headers(request: Request, call_next: Any) -> Response:
-    response: Response = await call_next(request)
-    path = request.url.path
-    # Strip version prefix so cache rules match versioned paths too
-    if path.startswith(_version_prefix):
-        path = path[len(_version_prefix) :]
-    for prefix, header in _CACHE_RULES.items():
-        if path.startswith(prefix):
-            response.headers["Cache-Control"] = header
-            break
-    # Track TEA endpoint usage
-    if response.status_code < 400:
-        for ep in _TEA_ENDPOINTS:
-            if path.startswith(ep):
-                cache = getattr(request.app.state, "cache", None)
-                if cache:
-                    await cache.track_endpoint(ep.lstrip("/"))
-                break
-    return response
+app.include_router(pages.router)
+app.include_router(seo.router)
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    html = (_STATIC_DIR / "index.html").read_text()
-    return HTMLResponse(
-        content=html.replace("{{VERSION}}", version("pypi-tea")),
-        headers={"Cache-Control": "public, max-age=300, s-maxage=300"},
-    )
+    return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})
+
+
+@app.get("/healthz")
+async def healthz() -> Any:
+    await read(_ping)
+    return {"status": "ok"}
+
+
+def _ping(conn: sqlite3.Connection) -> None:
+    conn.execute("SELECT 1").fetchone()
+
+
+# Edge cache rules for JSON responses (HTML routes set their own). Wheels are
+# immutable, so anything derived from one can be cached for a long time.
+_CACHE_RULES: tuple[tuple[str, str], ...] = (
+    ("/artifact/", "public, max-age=86400, s-maxage=604800, stale-if-error=604800"),
+    ("/component", "public, max-age=86400, s-maxage=604800, stale-if-error=604800"),
+    ("/productRelease/", "public, max-age=3600, s-maxage=86400, stale-if-error=604800"),
+    ("/product", "public, max-age=3600, s-maxage=3600, stale-if-error=86400"),
+    ("/discovery", "public, max-age=3600, s-maxage=3600, stale-if-error=86400"),
+    ("/.well-known/tea", "public, max-age=3600, s-maxage=3600"),
+    ("/attestation/", "public, max-age=3600, s-maxage=86400"),
+    ("/stats", "public, max-age=60, s-maxage=60"),
+)
+_TEA_ENDPOINTS = frozenset(
+    {
+        "discovery",
+        "products",
+        "product",
+        "productReleases",
+        "productRelease",
+        "component",
+        "componentRelease",
+        "artifact",
+    }
+)
+
+
+class EdgeMiddleware:
+    """Pure-ASGI middleware: request deadline, cache headers, endpoint usage counts.
+
+    The deadline turns anything stuck (slow disk, an upstream that never answers)
+    into a fast 503 instead of a connection the edge holds open until it gives up.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope["path"]
+        if path.startswith(_version_prefix):
+            path = path[len(_version_prefix) :]
+        rule = next((header for prefix, header in _CACHE_RULES if path.startswith(prefix)), None)
+        started = False
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+                status = message["status"]
+                headers = [
+                    (k, v) for k, v in message.get("headers", []) if k.lower() != b"cache-control" or rule is None
+                ]
+                if rule is not None:
+                    value = rule if status < 400 else ("no-store" if status >= 500 else "public, max-age=300")
+                    headers.append((b"cache-control", value.encode()))
+                message["headers"] = headers
+                if status < 400:
+                    endpoint = path.lstrip("/").split("/", 1)[0]
+                    if endpoint in _TEA_ENDPOINTS:
+                        usage.endpoint(endpoint)
+            await send(message)
+
+        try:
+            async with asyncio.timeout(settings.request_timeout_seconds):
+                await self.app(scope, receive, send_wrapper)
+        except TimeoutError:
+            if started:
+                raise
+            response = JSONResponse(
+                status_code=503,
+                content={"error": "Request timed out"},
+                headers={"Retry-After": "10", "Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+
+
+app.add_middleware(EdgeMiddleware)

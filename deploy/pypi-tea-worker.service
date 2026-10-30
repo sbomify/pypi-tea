@@ -1,31 +1,27 @@
 [Unit]
-Description=pypi-tea arq worker (package refresh jobs)
-After=network.target redis.service
-Wants=redis.service
+Description=pypi-tea ingest worker (PyPI fetches, SBOM extraction, attestation checks)
+After=network.target
 
 [Service]
 Type=exec
 User=pypi-tea
 Group=pypi-tea
+EnvironmentFile=-/etc/default/pypi-tea
+Environment=PYPI_TEA_DATABASE_PATH=/var/lib/pypi-tea/pypi-tea.db
+StateDirectory=pypi-tea
 
-Environment=PYPI_TEA_REDIS_URL=redis://localhost:6379/0
-Environment=PYPI_TEA_WORKER_MAX_JOBS=5
-Environment=XDG_CACHE_HOME=/tmp/pypi-tea/cache
-Environment=XDG_DATA_HOME=/tmp/pypi-tea/data
-Environment=HOME=/tmp/pypi-tea
-
-ExecStart=/usr/local/bin/uvx --python 3.14 --from pypi-tea@latest pypi-tea-worker
+ExecStart=/opt/pypi-tea/bin/pypi-tea-worker
 
 Restart=always
-RestartSec=10
-MemoryMax=1500M
+RestartSec=5
+TimeoutStopSec=60
 MemoryHigh=1200M
-TasksMax=128
+MemoryMax=1500M
 
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp/pypi-tea
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

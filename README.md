@@ -12,52 +12,53 @@ Python wheels can include SBOMs in `.dist-info/sboms/` ([PEP 770](https://peps.p
 
 ## How it works
 
-1. Client queries with a TEI or PURL identifier
-2. Server resolves the package via the [PyPI JSON API](https://docs.pypi.org/api/json/)
-3. Wheel files are inspected using HTTP range requests (via `remotezip`) to avoid downloading full wheels — only the ZIP central directory (~16KB) is fetched to check for `.dist-info/sboms/` entries
-4. If range requests aren't supported (some CDN configurations), falls back to downloading the full wheel
-5. SBOM files are extracted and mapped to TEA entities
-6. Everything is cached in Redis and served as TEA-compliant responses
+1. A TEA client queries with a TEI or PURL identifier.
+2. If the release is already indexed, the answer comes straight from the local SQLite store.
+3. If not, the API queues it and waits briefly while the worker:
+   - fetches the release from the [PyPI JSON API](https://docs.pypi.org/api/json/)
+   - reads each wheel's ZIP central directory and `.dist-info/sboms/` members with HTTP range requests (a few KB per wheel, not the whole file)
+   - detects and validates each SBOM's format, and checks PEP 740 attestations
+4. The result is stored permanently: wheels are immutable, so a wheel is never fetched twice.
 
 ## Architecture
 
 ```mermaid
 graph LR
-    Client -->|TEI / PURL| App["pypi-tea<br/>(FastAPI)"]
-    App -->|JSON API| PyPI
-    App -->|Range request<br/>or full GET| Wheels["Wheel files"]
-    App <-->|Caching| Redis
+    Client -->|TEI / PURL| API["pypi-tea-serve<br/>(gunicorn + uvicorn workers)"]
+    Crawler["Crawlers"] -->|HTML pages, sitemap| API
+    API <-->|reads, enqueue| DB[("SQLite (WAL)")]
+    Worker["pypi-tea-worker"] <-->|jobs, results| DB
+    Worker -->|JSON API, range requests| PyPI
 ```
 
-### Caching
+The service is split so that traffic can never turn into upstream work it can't afford:
 
-All data is stored in Redis. Nothing is persisted to disk — Redis is the sole data store.
+- **The API process never talks to PyPI.** Every page and TEA response is built from indexed SQLite lookups. Crawlers fetching package pages, listings, the sitemap or SBOM downloads cost a millisecond each, however many arrive at once.
+- **All upstream I/O happens in the worker,** at a fixed concurrency. A burst of lookups for unknown releases makes the queue longer; it does not multiply outbound connections, threads or memory.
+- **On-demand lookups are bounded.** A lookup for an unknown release waits at most `PYPI_TEA_RESOLVE_WAIT_SECONDS`. Past that, or once `PYPI_TEA_MAX_PENDING_LOOKUPS` lookups are queued, the API answers `503` with `Retry-After` instead of piling up.
+- **Every request has a deadline** (`PYPI_TEA_REQUEST_TIMEOUT_SECONDS`), and each API process caps open connections (`PYPI_TEA_MAX_CONNECTIONS_PER_WORKER`). Over either limit it sheds load with a fast `503` rather than stalling.
+- **Responses are edge-cacheable,** with `stale-if-error`, so Cloudflare can keep serving pages through an origin restart.
 
-| Data | Redis key pattern | TTL | Description |
-|---|---|---|---|
-| PyPI metadata | `pypi:{package}:{version}` | 1 hour | JSON API response for a package version |
-| SBOM content | `sbom:{wheel_url}` | 24 hours | Extracted SBOM files from a wheel (JSON array) |
-| Negative cache | `neg:{wheel_url}` | 24 hours | Marker for wheels confirmed to have no SBOMs |
-| UUID lookup | `uuid:{uuid}` | No expiry | Maps a deterministic UUID to entity metadata |
-| Entity index | `etype:{entity_type}` | No expiry | Redis set of UUIDs per entity type (for listing) |
-| Stats (totals) | `stats` | No expiry | Redis hash with cumulative hit/miss counters |
-| Stats (time series) | `stats:ts:{bucket}` | 24 hours | Per-5-minute counter buckets for time-series graphs |
+### Storage
 
-**Why these TTLs?**
-- PyPI metadata changes when new versions are released — 1 hour keeps things reasonably fresh
-- Wheel contents are immutable once published — 24 hours is conservative; SBOMs won't change
-- Negative cache prevents repeatedly downloading wheels that have no SBOMs
-- UUID lookups don't expire because they map deterministic UUIDs to stable data
+A single SQLite database in WAL mode, so any number of API processes read while the worker writes.
+
+| Table | Contents |
+|---|---|
+| `releases` | One row per resolved `package@version`: upload date, trimmed PyPI metadata, whether any wheel has an SBOM |
+| `wheels` | Every wheel of a release: digests, size, attestation result, and an error if it couldn't be read |
+| `sboms` | Every SBOM found: format, validity, media type, SHA-256, and the content (zlib-compressed) |
+| `entities` | Deterministic TEA UUID → product / release / component / artifact |
+| `listing` | Materialised browse order for `/packages` and the sitemap, rebuilt by the worker. Any page is a primary-key range read |
+| `jobs` | Work queue: interactive lookups (priority 0) ahead of backfill (5) and scheduled refresh (9). Claims are leases, so a crashed worker's job is picked up again |
+| `missing` | Releases PyPI says don't exist, retried after an hour |
+| `usage_*` | Query counters for the dashboard, buffered in memory and flushed every 10 s |
+
+Nothing expires. The worker re-checks every known project for new releases once a week; re-resolving a known release costs one PyPI JSON request, because already-inspected wheels are reused.
 
 ### Statistics
 
-The server tracks cache hit/miss ratios and SBOM availability:
-
-- **Cache metrics**: hits and misses for PyPI metadata, SBOM content, and negative cache lookups
-- **SBOM availability**: how many wheels had SBOMs vs didn't
-- **Time series**: all counters are also bucketed into 5-minute intervals (24h retention) for trend visualization
-
-Visit `GET /` for a live dashboard with charts, or `GET /stats` for raw JSON.
+`GET /` is a live dashboard; `GET /stats`, `/stats/timeseries`, `/stats/usage` and `/stats/invalid-sboms` return the raw JSON. They are computed from the tables above and cached for 60 s per process.
 
 ## Quick start
 
@@ -65,7 +66,6 @@ Visit `GET /` for a live dashboard with charts, or `GET /stats` for raw JSON.
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- Redis
 
 ### Install and run
 
@@ -73,10 +73,18 @@ Visit `GET /` for a live dashboard with charts, or `GET /stats` for raw JSON.
 git clone https://github.com/sbomify/pypi-tea.git
 cd pypi-tea
 uv sync
-uv run uvicorn pypi_tea.app:app
+# API and worker in one process, for development:
+PYPI_TEA_EMBEDDED_WORKER=true uv run uvicorn pypi_tea.app:app
 ```
 
-The server starts at `http://localhost:8000`. Visit the root URL for a live statistics dashboard.
+The server starts at `http://localhost:8000` and writes `pypi-tea.db` in the working directory.
+
+In production, run the two halves separately:
+
+```bash
+pypi-tea-serve      # API: one worker process per CPU
+pypi-tea-worker     # ingest worker
+```
 
 ### Configuration
 
@@ -84,10 +92,39 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 
 | Variable | Default | Description |
 |---|---|---|
-| `PYPI_TEA_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
+| `PYPI_TEA_DATABASE_PATH` | `pypi-tea.db` | SQLite database file (shared by API and worker) |
+| `PYPI_TEA_SERVER_ROOT_URL` | `http://localhost:8000` | Public root URL (used in TEA discovery responses, canonical links and the sitemap) |
 | `PYPI_TEA_PYPI_BASE_URL` | `https://pypi.org` | PyPI API base URL |
-| `PYPI_TEA_SERVER_ROOT_URL` | `http://localhost:8000` | Public root URL (used in TEA discovery responses) |
 | `PYPI_TEA_TEA_SPEC_VERSION` | `0.3.0-beta.2` | TEA spec version to advertise |
+| `PYPI_TEA_ATTESTATION_VERIFICATION` | `true` | Verify PEP 740 attestations |
+| `PYPI_TEA_BIND` | `127.0.0.1:8000` | `pypi-tea-serve` listen address |
+| `PYPI_TEA_WEB_WORKERS` | `0` (one per CPU) | `pypi-tea-serve` process count |
+| `PYPI_TEA_MAX_CONNECTIONS_PER_WORKER` | `512` | Open connections per API process before new ones get `503` |
+| `PYPI_TEA_FORWARDED_ALLOW_IPS` | `127.0.0.1` | Proxies trusted for `X-Forwarded-*` |
+| `PYPI_TEA_RESOLVE_WAIT_SECONDS` | `20` | How long a lookup for an unknown release waits for the worker |
+| `PYPI_TEA_MAX_PENDING_LOOKUPS` | `500` | Queued on-demand lookups before new ones are shed |
+| `PYPI_TEA_REQUEST_TIMEOUT_SECONDS` | `30` | Hard per-request deadline |
+| `PYPI_TEA_WORKER_CONCURRENCY` | `16` | Releases the worker resolves at once |
+| `PYPI_TEA_WHEEL_CONCURRENCY` | `4` | Wheels inspected at once within one release |
+| `PYPI_TEA_EMBEDDED_WORKER` | `false` | Run the worker inside the API process (development/tests only) |
+
+### Queue maintenance
+
+```bash
+pypi-tea-refresh --status            # queue depth per priority
+pypi-tea-refresh                     # check every known project for a new release now
+pypi-tea-refresh --existing          # ...and re-resolve every known release
+```
+
+### Migrating from 0.x (Redis)
+
+Since 26.10.0 (the switch to CalVer), pypi-tea stores everything in SQLite and no longer uses Redis. To carry over the set of known releases, queue them from the old keyspace; the worker re-resolves them, releases with SBOMs first:
+
+```bash
+uvx --from 'pypi-tea[import-redis]' pypi-tea-refresh --import-redis redis://localhost:6379/0
+```
+
+While a release is still queued, its package page answers `503` with `Retry-After`, so search engines retry rather than drop it. TEA UUIDs are deterministic and unchanged, except for projects with a `.` in their name: names are now normalised as PyPI does (PEP 503), so `zope.interface` and `zope-interface` are one product, `zope-interface`, and old `/package/zope.interface/…` URLs redirect there.
 
 ## TEA endpoints
 
@@ -115,8 +152,13 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 | Endpoint | Description |
 |---|---|
 | `GET /` | Statistics dashboard (Tailwind + Chart.js) |
+| `GET /package/{name}/{version}` | SBOM page for a release |
+| `GET /packages` | Browse releases with SBOMs (`page`, `format` query params) |
+| `GET /sitemap.xml` | Sitemap index; shards at `/sitemap-{n}.xml` |
+| `GET /attestation/{package}/{version}` | PEP 740 attestation results per wheel |
 | `GET /stats` | Raw statistics JSON |
-| `GET /stats/timeseries` | Time-bucketed statistics (5-min intervals, 24h retention) |
+| `GET /stats/timeseries` | Daily statistics (30 days) |
+| `GET /healthz` | Liveness: `200` when the database is readable |
 
 ## Example
 
@@ -145,32 +187,21 @@ All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable a
 
 ## Deployment
 
-A systemd service file and setup script are included in `deploy/`.
+A systemd setup is included in `deploy/`:
 
 ```bash
-# As root:
-sudo ./deploy/setup.sh
-sudo systemctl start pypi-tea
+sudo ./deploy/setup.sh 26.10.0    # installs into /opt/pypi-tea, enables both services
+sudoedit /etc/default/pypi-tea   # PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
+sudo systemctl restart pypi-tea pypi-tea-worker
 ```
 
-The setup script creates a dedicated `pypi-tea` system user and installs the systemd service. The service uses `uvx` to run pypi-tea directly from PyPI — no cloning or venv management needed.
-
-**Important:** Set `PYPI_TEA_SERVER_ROOT_URL` to your public URL — this is used in TEA discovery responses so clients know where to reach your server.
-
-```bash
-sudo systemctl edit pypi-tea
-```
-
-```ini
-[Service]
-Environment=PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
-Environment=PYPI_TEA_REDIS_URL=redis://my-redis:6379/1
-```
+The services run from a fixed virtualenv, so restarts don't depend on PyPI being reachable. The database lives in `/var/lib/pypi-tea/`.
 
 Logs:
 
 ```bash
 journalctl -u pypi-tea -f
+journalctl -u pypi-tea-worker -f
 ```
 
 ## Development
@@ -179,7 +210,7 @@ journalctl -u pypi-tea -f
 # Install dev dependencies
 uv sync --group dev
 
-# Run tests (uses fakeredis, no Redis required)
+# Run tests (no services needed; the conformance suite reaches live PyPI)
 uv run pytest
 
 # Lint
@@ -195,6 +226,10 @@ uv run mypy src/
 ### Conformance
 
 The test suite runs [libtea's conformance checks](https://pypi.org/project/libtea/) against an in-process server. 21 of 26 checks pass; 5 CLE (Collection Lifecycle Event) checks are skipped as CLE is not implemented.
+
+## Versioning
+
+Versions are CalVer, `YY.M.PATCH`, matching the other sbomify projects: the two-digit year and month of the release, then a counter that restarts at 0 each month. Releases are tagged `vYY.M.PATCH` (for example `v26.10.0`). 26.10.0 follows 0.6.2, so version ordering still holds for pip and uv.
 
 ## License
 

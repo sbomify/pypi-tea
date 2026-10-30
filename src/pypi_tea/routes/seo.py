@@ -1,49 +1,95 @@
-from collections.abc import AsyncIterator
+"""robots.txt and a sharded sitemap.
+
+Crawlers are pointed at the HTML pages and kept off the API: the API is for
+TEA clients, and an unknown PURL there costs a PyPI round trip.
+"""
+
+import math
+import sqlite3
 from html import escape
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Response
 from fastapi.responses import PlainTextResponse
-from starlette.responses import StreamingResponse
 
-from pypi_tea.cache import Cache
+from pypi_tea import store
 from pypi_tea.config import settings
-from pypi_tea.deps import get_cache
+from pypi_tea.lookup import memoized
 
 router = APIRouter()
 
 _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
+# Google accepts up to 50k URLs per sitemap; stay well under so each shard is a cheap range read.
+SHARD_SIZE = 10_000
+SHARD_TTL = 600.0
+SITEMAP_CACHE = "public, max-age=3600, s-maxage=3600, stale-if-error=86400"
+
+_DISALLOW = (
+    "/artifact/",
+    "/attestation/",
+    "/component",
+    "/discovery",
+    "/product",
+    "/stats",
+    "/v",
+)
 
 
-def _url_entry(loc: str, priority: str, changefreq: str) -> str:
+def _url(loc: str, priority: str, changefreq: str) -> str:
     return f"<url><loc>{escape(loc)}</loc><priority>{priority}</priority><changefreq>{changefreq}</changefreq></url>"
 
 
-async def _sitemap_xml(cache: Cache) -> AsyncIterator[str]:
-    """Stream sitemap XML using cursor-based SSCAN to avoid loading the full set."""
-    root_url = settings.server_root_url.rstrip("/")
-    yield '<?xml version="1.0" encoding="UTF-8"?>\n'
-    yield f'<urlset xmlns="{_SITEMAP_NS}">\n'
-    yield _url_entry(f"{root_url}/", "1.0", "daily") + "\n"
-    yield _url_entry(f"{root_url}/packages", "0.8", "daily") + "\n"
-    async for item in cache.scan_packages_with_sbom():
-        split = item.rsplit("@", 1)
-        if len(split) != 2:
-            continue
-        name, version = split
-        yield _url_entry(f"{root_url}/package/{name}/{version}", "0.6", "weekly") + "\n"
-    yield "</urlset>\n"
-
-
 @router.get("/sitemap.xml")
-async def sitemap(cache: Cache = Depends(get_cache)) -> Response:
-    return StreamingResponse(
-        _sitemap_xml(cache),
-        media_type="application/xml",
-        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
-    )
+async def sitemap_index() -> Response:
+    root = settings.server_root_url.rstrip("/")
+    total = await memoized("count:None", 60.0, store.count_packages_with_sbom, None)
+    shards = max(1, math.ceil(total / SHARD_SIZE))
+    body = ['<?xml version="1.0" encoding="UTF-8"?>', f'<sitemapindex xmlns="{_SITEMAP_NS}">']
+    body.append(f"<sitemap><loc>{escape(root)}/sitemap-pages.xml</loc></sitemap>")
+    body.extend(f"<sitemap><loc>{escape(root)}/sitemap-{i}.xml</loc></sitemap>" for i in range(shards))
+    body.append("</sitemapindex>")
+    return Response("\n".join(body), media_type="application/xml", headers={"Cache-Control": SITEMAP_CACHE})
+
+
+@router.get("/sitemap-pages.xml")
+async def sitemap_pages() -> Response:
+    root = settings.server_root_url.rstrip("/")
+    body = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<urlset xmlns="{_SITEMAP_NS}">',
+        _url(f"{root}/", "1.0", "daily"),
+        _url(f"{root}/packages", "0.8", "daily"),
+        "</urlset>",
+    ]
+    return Response("\n".join(body), media_type="application/xml", headers={"Cache-Control": SITEMAP_CACHE})
+
+
+def _render_shard(conn: sqlite3.Connection, shard: int) -> str | None:
+    rows = store.packages_with_sbom(conn, None, shard * SHARD_SIZE, SHARD_SIZE)
+    if not rows and shard > 0:
+        return None
+    root = settings.server_root_url.rstrip("/")
+    body = ['<?xml version="1.0" encoding="UTF-8"?>', f'<urlset xmlns="{_SITEMAP_NS}">']
+    body.extend(_url(f"{root}/package/{n}/{v}", "0.6", "weekly") for n, v, _ in rows)
+    body.append("</urlset>")
+    return "\n".join(body)
+
+
+@router.get("/sitemap-{shard:int}.xml")
+async def sitemap_shard(shard: int) -> Response:
+    total = await memoized("count:None", 60.0, store.count_packages_with_sbom, None)
+    if shard >= max(1, math.ceil(total / SHARD_SIZE)):
+        return Response(status_code=404)
+    # A shard is ~1 MB of XML; build it at most once per SHARD_TTL per process.
+    body = await memoized(f"sitemap:{shard}", SHARD_TTL, _render_shard, shard)
+    if body is None:
+        return Response(status_code=404)
+    return Response(body, media_type="application/xml", headers={"Cache-Control": SITEMAP_CACHE})
 
 
 @router.get("/robots.txt", response_class=PlainTextResponse)
 async def robots_txt() -> str:
-    root_url = settings.server_root_url.rstrip("/")
-    return f"User-agent: *\nAllow: /\n\nSitemap: {root_url}/sitemap.xml\n"
+    root = settings.server_root_url.rstrip("/")
+    lines = ["User-agent: *", "Allow: /$", "Allow: /package/", "Allow: /packages"]
+    lines += [f"Disallow: {p}" for p in _DISALLOW]
+    lines += ["", f"Sitemap: {root}/sitemap.xml", ""]
+    return "\n".join(lines)

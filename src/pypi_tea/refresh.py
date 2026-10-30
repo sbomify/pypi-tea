@@ -1,80 +1,83 @@
-"""Enqueue a refresh fan-out job onto the arq queue.
-
-The worker (`pypi-tea-worker`) pops and processes the individual jobs. This CLI
-is a thin trigger — it enqueues a single `enqueue_refresh` job and exits. Use
-it for manual refreshes; the worker's cron schedule handles the weekly run.
+"""Queue maintenance CLI.
 
 Usage:
-    pypi-tea-refresh                 # enqueue new-version detection only
-    pypi-tea-refresh --existing      # also re-resolve every known version
-    pypi-tea-refresh --limit 100     # cap number of packages (useful for testing)
-    pypi-tea-refresh --dry-run       # log what would be enqueued without enqueueing
+    pypi-tea-refresh                          # check every known project for a new release
+    pypi-tea-refresh --existing               # ...and re-resolve every known release
+    pypi-tea-refresh --limit 100              # cap the number of projects
+    pypi-tea-refresh --import-redis URL        # queue every release a 0.x (Redis) instance knew about
+    pypi-tea-refresh --status                 # print queue depth per priority
 
-Exit codes:
-    0   - Job enqueued
-    2   - Unexpected error (e.g., Redis unavailable, unexpected arq state)
-    130 - Interrupted by SIGINT / Ctrl-C
+Exit codes: 0 ok, 2 error, 130 interrupted.
 """
 
-from __future__ import annotations
-
 import argparse
-import asyncio
 import logging
-import os
 import sys
 
-from arq import create_pool
-from arq.connections import RedisSettings
+from packaging.utils import canonicalize_name
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+from pypi_tea import db, jobs
+from pypi_tea.config import settings
+from pypi_tea.worker import enqueue_refresh
+
 logger = logging.getLogger("pypi_tea.refresh")
 
-REDIS_URL = os.environ.get("PYPI_TEA_REDIS_URL", "redis://localhost:6379")
+
+def import_redis(redis_url: str) -> tuple[int, int]:
+    """Queue releases from a 0.x Redis keyspace: ones with SBOMs first, so their pages come back soonest."""
+    try:
+        import redis
+    except ImportError:
+        raise SystemExit("--import-redis needs the redis client: install pypi-tea[import-redis]") from None
+
+    r = redis.Redis.from_url(redis_url, decode_responses=True)
+
+    def members(key: str) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for entry in r.sscan_iter(key, count=1000):
+            name, sep, version = str(entry).rpartition("@")
+            if sep and name and version:
+                out.append((str(canonicalize_name(name)), version))
+        return out
+
+    conn = db.writer(settings.database_path)
+    with_sbom = members("unique:packages_with_sbom")
+    jobs.enqueue_many(conn, with_sbom, jobs.PRIORITY_BACKFILL)
+    seen = set(with_sbom)
+    rest = [k for k in members("unique:packages") if k not in seen]
+    jobs.enqueue_many(conn, rest, jobs.PRIORITY_BACKFILL + 1)
+    return len(with_sbom), len(rest)
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser(description="Enqueue a pypi-tea refresh job")
-    parser.add_argument("--existing", action="store_true", help="Also re-resolve existing versions")
-    parser.add_argument("--limit", type=int, default=0, help="Limit number of packages to process")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Log what the fan-out would enqueue without actually enqueueing",
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Queue pypi-tea refresh work")
+    parser.add_argument("--existing", action="store_true", help="Also re-resolve every known release")
+    parser.add_argument("--limit", type=int, default=0, help="Limit number of projects")
+    parser.add_argument("--import-redis", metavar="REDIS_URL", help="Queue every release known to a 0.x Redis instance")
+    parser.add_argument("--status", action="store_true", help="Print queue depth and exit")
     args = parser.parse_args()
 
-    pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
-    try:
-        job = await pool.enqueue_job(
-            "enqueue_refresh",
-            existing=args.existing,
-            limit=args.limit,
-            dry_run=args.dry_run,
-        )
-    finally:
-        await pool.aclose()
-
-    # arq only returns None from enqueue_job when a deterministic _job_id
-    # collides with an in-queue / recently-completed job.  We don't pass one,
-    # so a None here indicates an unexpected arq/Redis state.
-    if job is None:
-        logger.error("Failed to enqueue refresh job (unexpected arq/Redis state)")
-        sys.exit(2)
-    logger.info(
-        "Enqueued refresh job %s (existing=%s, limit=%d, dry_run=%s)",
-        job.job_id,
-        args.existing,
-        args.limit,
-        args.dry_run,
-    )
+    db.init_schema(settings.database_path)
+    if args.status:
+        for priority, n in sorted(jobs.depth(db.writer(settings.database_path)).items()):
+            print(f"priority {priority}: {n}")
+        return
+    if args.import_redis:
+        sboms, rest = import_redis(args.import_redis)
+        logger.info("queued %d releases with SBOMs and %d without from %s", sboms, rest, args.import_redis)
+        return
+    projects, releases = enqueue_refresh(existing=args.existing, limit=args.limit)
+    logger.info("queued %d project checks and %d release re-resolves", projects, releases)
 
 
 def cli() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         sys.exit(130)
+    except SystemExit:
+        raise
     except Exception:
         logger.exception("Unexpected error")
         sys.exit(2)
