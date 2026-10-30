@@ -1,5 +1,5 @@
-from pypi_tea.services.mapper import PurlQualifiers, parse_purl
 from pypi_tea.services.pypi import WheelInfo, filter_wheels_by_platform
+from pypi_tea.tea import PurlQualifiers, parse_purl
 
 WHEELS = [
     WheelInfo(

@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+loadtest/*.db*
+loadtest/uuids.txt
+pypi-tea.db*

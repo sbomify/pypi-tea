@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
@@ -15,11 +15,29 @@ class WheelInfo:
     size: int | None
 
 
-async def get_version_metadata(client: httpx.AsyncClient, package: str, version: str) -> dict[str, Any]:
-    url = f"{settings.pypi_base_url}/pypi/{package}/{version}/json"
-    resp = await client.get(url)
+class NotOnPyPI(Exception):
+    """PyPI answered 404 for the requested project or release."""
+
+
+async def _get_json(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
+    resp = await client.get(url, follow_redirects=True)
+    if resp.status_code == 404:
+        raise NotOnPyPI(url)
     resp.raise_for_status()
-    return resp.json()  # type: ignore[no-any-return]
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"unexpected JSON from {url}")
+    return data
+
+
+async def get_version_metadata(client: httpx.AsyncClient, package: str, version: str) -> dict[str, Any]:
+    return await _get_json(client, f"{settings.pypi_base_url}/pypi/{package}/{version}/json")
+
+
+async def get_latest_version(client: httpx.AsyncClient, package: str) -> str | None:
+    data = await _get_json(client, f"{settings.pypi_base_url}/pypi/{package}/json")
+    version = data.get("info", {}).get("version")
+    return version if isinstance(version, str) and version else None
 
 
 OS_TAG_MAP: dict[str, list[str]] = {
@@ -44,16 +62,21 @@ ARCH_TAG_MAP: dict[str, list[str]] = {
 }
 
 
-def filter_wheels_by_platform(
-    wheels: list[WheelInfo], os_filter: str | None = None, arch_filter: str | None = None
-) -> list[WheelInfo]:
+class _HasFilename(Protocol):
+    @property
+    def filename(self) -> str: ...
+
+
+def filter_wheels_by_platform[W: _HasFilename](
+    wheels: list[W], os_filter: str | None = None, arch_filter: str | None = None
+) -> list[W]:
     if not os_filter and not arch_filter:
         return wheels
 
     os_substrings = OS_TAG_MAP.get(os_filter.lower(), [os_filter.lower()]) if os_filter else None
     arch_substrings = ARCH_TAG_MAP.get(arch_filter.lower(), [arch_filter.lower()]) if arch_filter else None
 
-    result: list[WheelInfo] = []
+    result: list[W] = []
     for wheel in wheels:
         try:
             _, _, _, tags = parse_wheel_filename(wheel.filename)

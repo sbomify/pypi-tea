@@ -1,10 +1,9 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import fakeredis.aioredis
 import httpx
+import pytest
 
-from pypi_tea.cache import Cache
 from pypi_tea.services.attestation import (
     AttestationResult,
     check_wheel_attestation,
@@ -59,13 +58,6 @@ SAMPLE_PROVENANCE = {
 }
 
 
-def _make_cache() -> Cache:
-    c = Cache.__new__(Cache)
-    c._redis_url = "redis://fake"
-    c._r = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    return c
-
-
 # --- fetch_provenance tests ---
 
 
@@ -95,23 +87,22 @@ def test_fetch_provenance_404():
     assert result is None
 
 
-def test_fetch_provenance_403():
-    mock_resp = MagicMock()
-    mock_resp.status_code = 403
-
+def test_fetch_provenance_server_error_raises_for_retry():
+    """A 5xx must not be recorded as "no provenance" — the ingest job retries instead."""
+    request = httpx.Request("GET", "https://pypi.org/integrity/pkg/1.0.0/x.whl/provenance")
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.get.return_value = mock_resp
+    client.get.return_value = httpx.Response(503, request=request)
 
-    result = asyncio.run(fetch_provenance(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl"))
-    assert result is None
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(fetch_provenance(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl"))
 
 
-def test_fetch_provenance_http_error():
+def test_fetch_provenance_http_error_propagates():
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get.side_effect = httpx.ConnectError("connection refused")
 
-    result = asyncio.run(fetch_provenance(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl"))
-    assert result is None
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(fetch_provenance(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl"))
 
 
 # --- verify_provenance tests ---
@@ -184,157 +175,77 @@ def test_verify_provenance_empty_bundles(mock_provenance_cls):
 
 # --- check_wheel_attestation tests ---
 
+SHA = SAMPLE_WHEEL.digests["sha256"]
+
+
+def _settings(enabled: bool = True):
+    patcher = patch("pypi_tea.services.attestation.settings")
+    mock_settings = patcher.start()
+    mock_settings.attestation_verification = enabled
+    mock_settings.pypi_base_url = "https://pypi.org"
+    return patcher
+
 
 def test_check_wheel_attestation_disabled():
-    cache = _make_cache()
     client = AsyncMock(spec=httpx.AsyncClient)
-    with patch("pypi_tea.services.attestation.settings") as mock_settings:
-        mock_settings.attestation_verification = False
-        result = asyncio.run(check_wheel_attestation(client, cache, "cryptography", "44.0.3", SAMPLE_WHEEL))
-
+    patcher = _settings(enabled=False)
+    try:
+        result = asyncio.run(check_wheel_attestation(client, "cryptography", "44.0.3", SAMPLE_WHEEL.filename, SHA))
+    finally:
+        patcher.stop()
     assert result.status == "disabled"
-
-
-def test_check_wheel_attestation_cache_hit():
-    async def _run():
-        cache = _make_cache()
-        cached_data = {"status": "verified", "publisher_kind": "GitHub", "repository": "pyca/cryptography"}
-        await cache.set_attestation(SAMPLE_WHEEL.url, cached_data)
-
-        client = AsyncMock(spec=httpx.AsyncClient)
-        with patch("pypi_tea.services.attestation.settings") as mock_settings:
-            mock_settings.attestation_verification = True
-            result = await check_wheel_attestation(client, cache, "cryptography", "44.0.3", SAMPLE_WHEEL)
-
-        assert result.status == "verified"
-        assert result.publisher_kind == "GitHub"
-        client.get.assert_not_called()
-
-    asyncio.run(_run())
+    client.get.assert_not_called()
 
 
 def test_check_wheel_attestation_not_available():
-    async def _run():
-        cache = _make_cache()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 404
-
-        client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.return_value = mock_resp
-
-        with patch("pypi_tea.services.attestation.settings") as mock_settings:
-            mock_settings.attestation_verification = True
-            mock_settings.pypi_base_url = "https://pypi.org"
-            result = await check_wheel_attestation(client, cache, "requests", "2.31.0", SAMPLE_WHEEL)
-
-        assert result.status == "not_available"
-        cached = await cache.get_attestation(SAMPLE_WHEEL.url)
-        assert cached is not None
-        assert cached["status"] == "not_available"
-
-    asyncio.run(_run())
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get.return_value = mock_resp
+    patcher = _settings()
+    try:
+        result = asyncio.run(check_wheel_attestation(client, "requests", "2.31.0", SAMPLE_WHEEL.filename, SHA))
+    finally:
+        patcher.stop()
+    assert result.status == "not_available"
 
 
 def test_check_wheel_attestation_no_sha256():
-    async def _run():
-        cache = _make_cache()
-        wheel_no_sha = WheelInfo(
-            filename="pkg-1.0.0-py3-none-any.whl",
-            url="https://files.pythonhosted.org/packages/pkg-1.0.0-py3-none-any.whl",
-            digests={"md5": "abc123"},
-            size=1000,
-        )
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = SAMPLE_PROVENANCE
-
-        client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.return_value = mock_resp
-
-        with patch("pypi_tea.services.attestation.settings") as mock_settings:
-            mock_settings.attestation_verification = True
-            mock_settings.pypi_base_url = "https://pypi.org"
-            result = await check_wheel_attestation(client, cache, "pkg", "1.0.0", wheel_no_sha)
-
-        assert result.status == "failed"
-        assert "SHA-256" in (result.error or "")
-
-    asyncio.run(_run())
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = SAMPLE_PROVENANCE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get.return_value = mock_resp
+    patcher = _settings()
+    try:
+        result = asyncio.run(check_wheel_attestation(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl", None))
+    finally:
+        patcher.stop()
+    assert result.status == "failed"
+    assert "SHA-256" in (result.error or "")
 
 
 def test_check_wheel_attestation_unexpected_error():
-    async def _run():
-        cache = _make_cache()
-        client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.side_effect = RuntimeError("something went wrong")
-
-        with patch("pypi_tea.services.attestation.settings") as mock_settings:
-            mock_settings.attestation_verification = True
-            mock_settings.pypi_base_url = "https://pypi.org"
-            result = await check_wheel_attestation(client, cache, "pkg", "1.0.0", SAMPLE_WHEEL)
-
-        assert result.status == "failed"
-        assert result.error is not None
-
-    asyncio.run(_run())
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get.side_effect = RuntimeError("something went wrong")
+    patcher = _settings()
+    try:
+        result = asyncio.run(check_wheel_attestation(client, "pkg", "1.0.0", SAMPLE_WHEEL.filename, SHA))
+    finally:
+        patcher.stop()
+    assert result.status == "failed"
+    assert result.error is not None
 
 
-# --- Stats tracking tests ---
-
-
-def test_attestation_stats_tracking():
-    async def _run():
-        cache = _make_cache()
-        await cache.track_attestation_status("wheel1", "verified")
-        await cache.track_attestation_publisher("wheel1", "GitHub")
-
-        stats = await cache.get_stats()
-        assert stats["attestations"]["verified"] == 1
-        assert stats["attestation_publishers"]["GitHub"] == 1
-
-    asyncio.run(_run())
-
-
-def test_attestation_stats_idempotent():
-    async def _run():
-        cache = _make_cache()
-        await cache.track_attestation_status("wheel1", "verified")
-        await cache.track_attestation_status("wheel1", "verified")
-
-        stats = await cache.get_stats()
-        assert stats["attestations"]["verified"] == 1
-
-    asyncio.run(_run())
-
-
-def test_attestation_stats_correction():
-    async def _run():
-        cache = _make_cache()
-        await cache.track_attestation_status("wheel1", "not_available")
-        stats = await cache.get_stats()
-        assert stats["attestations"]["not_available"] == 1
-
-        await cache.track_attestation_status("wheel1", "verified")
-        stats = await cache.get_stats()
-        assert stats["attestations"]["verified"] == 1
-        assert stats["attestations"].get("not_available", 0) == 0
-
-    asyncio.run(_run())
-
-
-def test_attestation_publisher_stats_multiple():
-    async def _run():
-        cache = _make_cache()
-        await cache.track_attestation_publisher("wheel1", "GitHub")
-        await cache.track_attestation_publisher("wheel2", "GitHub")
-        await cache.track_attestation_publisher("wheel3", "GitLab")
-
-        stats = await cache.get_stats()
-        assert stats["attestation_publishers"]["GitHub"] == 2
-        assert stats["attestation_publishers"]["GitLab"] == 1
-
-    asyncio.run(_run())
+def test_check_wheel_attestation_transport_error_propagates():
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get.side_effect = httpx.ReadTimeout("slow")
+    patcher = _settings()
+    try:
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(check_wheel_attestation(client, "pkg", "1.0.0", SAMPLE_WHEEL.filename, SHA))
+    finally:
+        patcher.stop()
 
 
 # --- AttestationResult serialization tests ---

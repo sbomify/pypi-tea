@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -5,9 +6,7 @@ from typing import Any
 import httpx
 from pypi_attestations import Distribution, Provenance, VerificationError
 
-from pypi_tea.cache import Cache
 from pypi_tea.config import settings
-from pypi_tea.services.pypi import WheelInfo
 
 logger = logging.getLogger("pypi_tea.attestation")
 
@@ -62,21 +61,17 @@ _NOT_AVAILABLE_RESULT = AttestationResult(status="not_available")
 async def fetch_provenance(
     client: httpx.AsyncClient, package: str, version: str, filename: str
 ) -> dict[str, Any] | None:
-    """Fetch PEP 740 provenance from PyPI's integrity API. Returns JSON dict on 200, None otherwise."""
-    url = f"{settings.pypi_base_url}/integrity/{package}/{version}/{filename}/provenance"
-    try:
-        resp = await client.get(url, headers={"Accept": "application/vnd.pypi.integrity.v1+json"})
-    except httpx.HTTPError as e:
-        logger.warning("Failed to fetch provenance for %s: %s", filename, e)
-        return None
+    """Fetch PEP 740 provenance from PyPI's integrity API.
 
-    if resp.status_code == 200:
-        return resp.json()  # type: ignore[no-any-return]
+    Returns the JSON on 200 and None on 404. Anything else raises, so the
+    ingest job is retried instead of recording a transient failure forever.
+    """
+    url = f"{settings.pypi_base_url}/integrity/{package}/{version}/{filename}/provenance"
+    resp = await client.get(url, headers={"Accept": "application/vnd.pypi.integrity.v1+json"})
     if resp.status_code == 404:
-        logger.debug("No provenance available for %s", filename)
         return None
-    logger.warning("Provenance fetch for %s returned status %d", filename, resp.status_code)
-    return None
+    resp.raise_for_status()
+    return resp.json()  # type: ignore[no-any-return]
 
 
 def verify_provenance(provenance_data: dict[str, Any], filename: str, sha256_digest: str) -> AttestationResult:
@@ -121,35 +116,25 @@ def verify_provenance(provenance_data: dict[str, Any], filename: str, sha256_dig
 
 
 async def check_wheel_attestation(
-    client: httpx.AsyncClient, cache: Cache, package: str, version: str, wheel: WheelInfo
+    client: httpx.AsyncClient, package: str, version: str, filename: str, sha256: str | None
 ) -> AttestationResult:
-    """Check PEP 740 attestation for a wheel. Non-blocking: returns a result even on errors."""
+    """Check PEP 740 attestation for a wheel.
+
+    Verification problems become a "failed" result; HTTP errors propagate so the job retries.
+
+    Signature verification is CPU-bound, so it runs off the event loop.
+    """
     if not settings.attestation_verification:
         return _DISABLED_RESULT
-
-    # Check cache
-    cached = await cache.get_attestation(wheel.url)
-    if cached is not None:
-        return AttestationResult.from_dict(cached)
-
     try:
-        provenance_data = await fetch_provenance(client, package, version, wheel.filename)
+        provenance_data = await fetch_provenance(client, package, version, filename)
         if provenance_data is None:
-            result = _NOT_AVAILABLE_RESULT
-        else:
-            sha256 = wheel.digests.get("sha256")
-            if not sha256:
-                result = AttestationResult(status="failed", error="No SHA-256 digest available for wheel")
-            else:
-                result = verify_provenance(provenance_data, wheel.filename, sha256)
+            return _NOT_AVAILABLE_RESULT
+        if not sha256:
+            return AttestationResult(status="failed", error="No SHA-256 digest available for wheel")
+        return await asyncio.to_thread(verify_provenance, provenance_data, filename, sha256)
+    except httpx.HTTPError:
+        raise
     except Exception as e:
-        logger.error("Unexpected error checking attestation for %s: %s", wheel.filename, e)
-        result = AttestationResult(status="failed", error=str(e))
-
-    # Cache and track
-    await cache.set_attestation(wheel.url, result.to_dict())
-    await cache.track_attestation_status(wheel.url, result.status)
-    if result.publisher_kind:
-        await cache.track_attestation_publisher(wheel.url, result.publisher_kind)
-
-    return result
+        logger.error("Unexpected error checking attestation for %s: %s", filename, e)
+        return AttestationResult(status="failed", error=str(e))
