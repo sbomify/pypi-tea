@@ -118,10 +118,10 @@ pypi-tea-refresh --existing          # ...and re-resolve every known release
 
 ### Migrating from 0.x (Redis)
 
-1.0 stores everything in SQLite and no longer uses Redis. To carry over the set of known releases, queue them from the old keyspace; the worker re-resolves them, releases with SBOMs first:
+Since 26.10.0 (the switch to CalVer), pypi-tea stores everything in SQLite and no longer uses Redis. To carry over the set of known releases, queue them from the old keyspace; the worker re-resolves them, releases with SBOMs first:
 
 ```bash
-uvx --from 'pypi-tea[import-v1]' pypi-tea-refresh --import-v1 redis://localhost:6379/0
+uvx --from 'pypi-tea[import-redis]' pypi-tea-refresh --import-redis redis://localhost:6379/0
 ```
 
 While a release is still queued, its package page answers `503` with `Retry-After`, so search engines retry rather than drop it. TEA UUIDs are deterministic and unchanged.
@@ -190,7 +190,7 @@ All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable a
 A systemd setup is included in `deploy/`:
 
 ```bash
-sudo ./deploy/setup.sh 1.0.0     # installs into /opt/pypi-tea, enables both services
+sudo ./deploy/setup.sh 26.10.0    # installs into /opt/pypi-tea, enables both services
 sudoedit /etc/default/pypi-tea   # PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
 sudo systemctl restart pypi-tea pypi-tea-worker
 ```
@@ -226,6 +226,10 @@ uv run mypy src/
 ### Conformance
 
 The test suite runs [libtea's conformance checks](https://pypi.org/project/libtea/) against an in-process server. 21 of 26 checks pass; 5 CLE (Collection Lifecycle Event) checks are skipped as CLE is not implemented.
+
+## Versioning
+
+Versions are CalVer, `YY.M.PATCH`, matching the other sbomify projects: the two-digit year and month of the release, then a counter that restarts at 0 each month. Releases are tagged `vYY.M.PATCH` (for example `v26.10.0`). 26.10.0 follows 0.6.2, so version ordering still holds for pip and uv.
 
 ## License
 

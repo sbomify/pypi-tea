@@ -830,7 +830,7 @@ wheels = [
 
 [[package]]
 name = "pypi-tea"
-version = "1.0.0"
+version = "26.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -854,7 +854,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-import-v1 = [
+import-redis = [
     { name = "redis" },
 ]
 
@@ -881,14 +881,14 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pygments", specifier = ">=2.20.0" },
     { name = "pypi-attestations", specifier = ">=0.0.13" },
-    { name = "redis", marker = "extra == 'import-v1'", specifier = ">=5.0" },
+    { name = "redis", marker = "extra == 'import-redis'", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.0" },
     { name = "spdx-tools", specifier = ">=0.8.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "uvicorn-worker", specifier = ">=0.3" },
 ]
-provides-extras = ["import-v1"]
+provides-extras = ["import-redis"]
 
 [package.metadata.requires-dev]
 dev = [

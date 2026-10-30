@@ -1,6 +1,6 @@
 [project]
 name = "pypi-tea"
-version = "1.0.0"
+version = "26.10.0"
 description = "TEA Server for PyPI Package SBOMs"
 readme = "README.md"
 license = "Apache-2.0"
@@ -27,8 +27,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only needed for `pypi-tea-refresh --import-v1` (migrating from a 0.x Redis deployment).
-import-v1 = ["redis>=5.0"]
+# Only needed for `pypi-tea-refresh --import-redis` (migrating from a 0.x Redis deployment).
+import-redis = ["redis>=5.0"]
 
 [project.scripts]
 pypi-tea-serve = "pypi_tea.serve:cli"

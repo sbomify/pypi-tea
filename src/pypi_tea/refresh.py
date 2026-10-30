@@ -4,7 +4,7 @@ Usage:
     pypi-tea-refresh                          # check every known project for a new release
     pypi-tea-refresh --existing               # ...and re-resolve every known release
     pypi-tea-refresh --limit 100              # cap the number of projects
-    pypi-tea-refresh --import-v1 REDIS_URL    # queue every release a 0.x (Redis) instance knew about
+    pypi-tea-refresh --import-redis URL        # queue every release a 0.x (Redis) instance knew about
     pypi-tea-refresh --status                 # print queue depth per priority
 
 Exit codes: 0 ok, 2 error, 130 interrupted.
@@ -21,12 +21,12 @@ from pypi_tea.worker import enqueue_refresh
 logger = logging.getLogger("pypi_tea.refresh")
 
 
-def import_v1(redis_url: str) -> tuple[int, int]:
+def import_redis(redis_url: str) -> tuple[int, int]:
     """Queue releases from a 0.x Redis keyspace: ones with SBOMs first, so their pages come back soonest."""
     try:
         import redis
     except ImportError:
-        raise SystemExit("--import-v1 needs the redis client: install pypi-tea[import-v1]") from None
+        raise SystemExit("--import-redis needs the redis client: install pypi-tea[import-redis]") from None
 
     r = redis.Redis.from_url(redis_url, decode_responses=True)
 
@@ -51,7 +51,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Queue pypi-tea refresh work")
     parser.add_argument("--existing", action="store_true", help="Also re-resolve every known release")
     parser.add_argument("--limit", type=int, default=0, help="Limit number of projects")
-    parser.add_argument("--import-v1", metavar="REDIS_URL", help="Queue every release known to a 0.x Redis instance")
+    parser.add_argument("--import-redis", metavar="REDIS_URL", help="Queue every release known to a 0.x Redis instance")
     parser.add_argument("--status", action="store_true", help="Print queue depth and exit")
     args = parser.parse_args()
 
@@ -60,9 +60,9 @@ def main() -> None:
         for priority, n in sorted(jobs.depth(db.writer(settings.database_path)).items()):
             print(f"priority {priority}: {n}")
         return
-    if args.import_v1:
-        sboms, rest = import_v1(args.import_v1)
-        logger.info("queued %d releases with SBOMs and %d without from %s", sboms, rest, args.import_v1)
+    if args.import_redis:
+        sboms, rest = import_redis(args.import_redis)
+        logger.info("queued %d releases with SBOMs and %d without from %s", sboms, rest, args.import_redis)
         return
     projects, releases = enqueue_refresh(existing=args.existing, limit=args.limit)
     logger.info("queued %d project checks and %d release re-resolves", projects, releases)
