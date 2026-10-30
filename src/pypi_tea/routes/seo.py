@@ -76,6 +76,9 @@ def _render_shard(conn: sqlite3.Connection, shard: int) -> str | None:
 
 @router.get("/sitemap-{shard:int}.xml")
 async def sitemap_shard(shard: int) -> Response:
+    total = await memoized("count:None", 60.0, store.count_packages_with_sbom, None)
+    if shard >= max(1, math.ceil(total / SHARD_SIZE)):
+        return Response(status_code=404)
     # A shard is ~1 MB of XML; build it at most once per SHARD_TTL per process.
     body = await memoized(f"sitemap:{shard}", SHARD_TTL, _render_shard, shard)
     if body is None:

@@ -29,14 +29,18 @@ class Job:
     attempts: int
 
 
+# Re-enqueueing raises priority. A job raised to a higher priority also drops any
+# backoff, so a client lookup isn't stuck behind a refresh job's retry delay.
+_UPSERT = """
+    INSERT INTO jobs (name, version, priority, enqueued_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (name, version) DO UPDATE SET
+        not_before = CASE WHEN excluded.priority < priority THEN 0 ELSE not_before END,
+        priority = min(priority, excluded.priority)
+"""
+
+
 def enqueue(conn: sqlite3.Connection, name: str, version: str, priority: int) -> None:
-    conn.execute(
-        """
-        INSERT INTO jobs (name, version, priority, enqueued_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT (name, version) DO UPDATE SET priority = min(priority, excluded.priority)
-        """,
-        (name, version, priority, int(time.time())),
-    )
+    conn.execute(_UPSERT, (name, version, priority, int(time.time())))
 
 
 def enqueue_many(conn: sqlite3.Connection, items: list[tuple[str, str]], priority: int) -> None:
@@ -44,10 +48,7 @@ def enqueue_many(conn: sqlite3.Connection, items: list[tuple[str, str]], priorit
     begin(conn)
     try:
         conn.executemany(
-            """
-            INSERT INTO jobs (name, version, priority, enqueued_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT (name, version) DO UPDATE SET priority = min(priority, excluded.priority)
-            """,
+            _UPSERT,
             [(n, v, priority, now) for n, v in items],
         )
         conn.execute("COMMIT")

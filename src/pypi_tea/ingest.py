@@ -25,6 +25,8 @@ logger = logging.getLogger("pypi_tea.ingest")
 SBOM_DIR = ".dist-info/sboms/"
 _INFO_FIELDS = ("summary", "author", "license", "requires_python", "project_urls", "classifiers")
 _MAX_INFO_TEXT = 2000
+# Prefix on a stored wheel error that should be re-attempted on the next resolve.
+RETRY_PREFIX = "retryable: "
 # Attestation results worth keeping; anything else is re-checked on the next resolve.
 _FINAL_ATTESTATION = frozenset({"verified", "not_available"})
 
@@ -44,7 +46,7 @@ async def _inspect_wheel(client: httpx.AsyncClient, wheel: WheelInfo) -> tuple[l
         members = await read_members(client, wheel.url, wheel.size, lambda n: SBOM_DIR in n)
     except WheelError as e:
         logger.info("cannot inspect %s: %s", wheel.filename, e)
-        return [], str(e)
+        return [], f"{RETRY_PREFIX}{e}" if e.retryable else str(e)
     sboms: list[SbomRecord] = []
     for path in sorted(members):
         content = members[path].decode("utf-8", errors="replace")
@@ -68,21 +70,42 @@ async def _inspect_wheel(client: httpx.AsyncClient, wheel: WheelInfo) -> tuple[l
 
 
 async def _resolve_wheel(
-    client: httpx.AsyncClient, name: str, version: str, wheel: WheelInfo, previous: WheelRecord | None
+    client: httpx.AsyncClient,
+    name: str,
+    version: str,
+    wheel: WheelInfo,
+    previous: WheelRecord | None,
+    final_attempt: bool,
 ) -> WheelRecord:
-    if previous is not None:
+    """Inspect one wheel, reusing a previous inspection when the result can't change.
+
+    On the job's final attempt, transient HTTP failures are recorded on the wheel
+    (and retried on the next resolve) instead of failing the whole release.
+    """
+    reusable = previous is not None and not (previous.error or "").startswith(RETRY_PREFIX)
+    if previous is not None and reusable:
         contents = await asyncio.to_thread(_stored_contents, wheel.url)
         sboms = [s for s in previous.sboms if s.path in contents]
         for s in sboms:
             s.content = contents[s.path]
         error = previous.error
     else:
-        sboms, error = await _inspect_wheel(client, wheel)
+        try:
+            sboms, error = await _inspect_wheel(client, wheel)
+        except httpx.HTTPError as e:
+            if not final_attempt:
+                raise
+            sboms, error = [], f"{RETRY_PREFIX}{type(e).__name__}: {e}"
 
     attestation = previous.attestation if previous is not None else None
     if attestation is None or attestation.get("status") not in _FINAL_ATTESTATION:
-        result = await check_wheel_attestation(client, name, version, wheel.filename, wheel.digests.get("sha256"))
-        attestation = result.to_dict()
+        try:
+            result = await check_wheel_attestation(client, name, version, wheel.filename, wheel.digests.get("sha256"))
+            attestation = result.to_dict()
+        except httpx.HTTPError as e:
+            if not final_attempt:
+                raise
+            attestation = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
 
     return WheelRecord(
         url=wheel.url,
@@ -111,7 +134,9 @@ def _mark_missing(name: str, version: str) -> None:
     store.mark_missing(db.writer(settings.database_path), name, version)
 
 
-async def ingest_release(client: httpx.AsyncClient, name: str, version: str) -> ReleaseRecord | None:
+async def ingest_release(
+    client: httpx.AsyncClient, name: str, version: str, final_attempt: bool = False
+) -> ReleaseRecord | None:
     """Fetch, inspect and store one release. Returns None if PyPI doesn't have it."""
     try:
         metadata = await get_version_metadata(client, name, version)
@@ -129,7 +154,7 @@ async def ingest_release(client: httpx.AsyncClient, name: str, version: str) -> 
 
     async def one(wheel: WheelInfo) -> WheelRecord:
         async with sem:
-            return await _resolve_wheel(client, name, version, wheel, previous_wheels.get(wheel.url))
+            return await _resolve_wheel(client, name, version, wheel, previous_wheels.get(wheel.url), final_attempt)
 
     records = await asyncio.gather(*(one(w) for w in wheels))
     release = ReleaseRecord(

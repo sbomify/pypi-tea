@@ -4,10 +4,12 @@ import math
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader
+from packaging.utils import canonicalize_name
 
 from pypi_tea import jobs, store
 from pypi_tea.config import settings
@@ -77,7 +79,15 @@ def page_context(release: ReleaseRecord) -> dict[str, Any]:
 
 
 @router.get("/package/{name}/{pkg_version}", response_class=HTMLResponse)
-async def package_page(name: str, pkg_version: str) -> HTMLResponse:
+async def package_page(name: str, pkg_version: str) -> Response:
+    canonical = canonicalize_name(name)
+    if canonical != name:
+        # One URL per project: `/package/Ruamel.YAML/…` -> `/package/ruamel-yaml/…`.
+        return RedirectResponse(
+            f"/package/{quote(canonical)}/{quote(pkg_version)}",
+            status_code=301,
+            headers={"Cache-Control": PAGE_CACHE},
+        )
     release = await read(store.get_release, name, pkg_version)
     if release is None or not release.has_sbom:
         if release is None and await read(jobs.is_queued, name, pkg_version):

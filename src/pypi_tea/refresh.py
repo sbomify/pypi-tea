@@ -14,6 +14,8 @@ import argparse
 import logging
 import sys
 
+from packaging.utils import canonicalize_name
+
 from pypi_tea import db, jobs
 from pypi_tea.config import settings
 from pypi_tea.worker import enqueue_refresh
@@ -31,11 +33,11 @@ def import_redis(redis_url: str) -> tuple[int, int]:
     r = redis.Redis.from_url(redis_url, decode_responses=True)
 
     def members(key: str) -> list[tuple[str, str]]:
-        out = []
+        out: list[tuple[str, str]] = []
         for entry in r.sscan_iter(key, count=1000):
             name, sep, version = str(entry).rpartition("@")
             if sep and name and version:
-                out.append((name, version))
+                out.append((str(canonicalize_name(name)), version))
         return out
 
     conn = db.writer(settings.database_path)

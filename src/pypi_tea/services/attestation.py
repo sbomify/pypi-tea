@@ -133,6 +133,11 @@ async def check_wheel_attestation(
         if not sha256:
             return AttestationResult(status="failed", error="No SHA-256 digest available for wheel")
         return await asyncio.to_thread(verify_provenance, provenance_data, filename, sha256)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if 400 <= status < 500 and status != 429:
+            return AttestationResult(status="failed", error=f"integrity API returned HTTP {status}")
+        raise
     except httpx.HTTPError:
         raise
     except Exception as e:

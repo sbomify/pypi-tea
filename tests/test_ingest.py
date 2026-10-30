@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 import time
 
 import httpx
@@ -201,3 +202,128 @@ def test_retry_backs_off_then_gives_up(database: str) -> None:
     exhausted = jobs.Job(id=job.id, name="a", version="1", priority=9, attempts=jobs.MAX_ATTEMPTS)
     assert not jobs.retry_later(conn, exhausted, "boom")
     assert jobs.depth(conn) == {}
+
+
+# --- review regressions ---
+
+
+def _corrupt_member_wheel() -> bytes:
+    """A wheel whose SBOM member's deflate stream is garbage (central directory intact)."""
+    good = make_wheel({"demo-1.0.dist-info/sboms/demo.cdx.json": json.dumps(CDX).encode() * 50})
+    marker = b"demo-1.0.dist-info/sboms/demo.cdx.json"
+    start = good.index(marker) + len(marker)  # first occurrence: local header, data follows
+    return good[:start] + bytes(b ^ 0xFF for b in good[start : start + 64]) + good[start + 64 :]
+
+
+def test_corrupt_member_is_recorded_not_a_job_failure(database: str, fake_pypi: FakePyPI) -> None:
+    fake_pypi.add(
+        "demo",
+        "1.0",
+        [
+            ("demo-1.0-py3-none-any.whl", _corrupt_member_wheel()),
+            ("demo-1.0-cp312-cp312-win_amd64.whl", sbom_wheel("demo", "1.0")),
+        ],
+    )
+    _ingest(fake_pypi, "demo", "1.0")
+    release = store.get_release(db.connect(database), "demo", "1.0")
+    assert release is not None
+    by_name = {w.filename: w for w in release.wheels}
+    assert by_name["demo-1.0-py3-none-any.whl"].error
+    assert by_name["demo-1.0-cp312-cp312-win_amd64.whl"].has_sbom
+
+
+def test_final_attempt_stores_release_and_retries_wheel_later(database: str, fake_pypi: FakePyPI) -> None:
+    fake_pypi.add("demo", "1.0", [("demo-1.0-py3-none-any.whl", sbom_wheel("demo", "1.0"))])
+    down = {"files": True}
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "files.example.com" and down["files"]:
+            return httpx.Response(503)
+        return fake_pypi.handler(request)
+
+    async def run(final: bool) -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(flaky)) as client:
+            await ingest_release(client, "demo", "1.0", final_attempt=final)
+
+    asyncio.run(run(True))
+    release = store.get_release(db.connect(database), "demo", "1.0")
+    assert release is not None and not release.has_sbom
+    assert (release.wheels[0].error or "").startswith("retryable: ")
+
+    down["files"] = False
+    asyncio.run(run(False))
+    release = store.get_release(db.connect(database), "demo", "1.0")
+    assert release is not None and release.has_sbom, "a retryable error is re-inspected on the next resolve"
+    assert release.wheels[0].error is None
+
+
+def test_wheel_4xx_is_a_retryable_wheel_error(fake_pypi: FakePyPI) -> None:
+    async def run() -> None:
+        async with fake_pypi.client() as client:
+            await read_members(client, "https://files.example.com/gone.whl", 1000, lambda n: True)
+
+    with pytest.raises(WheelError) as exc:
+        asyncio.run(run())
+    assert exc.value.retryable
+
+
+def test_name_spellings_share_one_release(database: str, fake_pypi: FakePyPI) -> None:
+    from pypi_tea.tea import parse_purl
+
+    assert parse_purl("pkg:pypi/Ruamel.YAML@0.18")[0] == "ruamel-yaml"
+    assert parse_purl("pkg:pypi/ruamel_yaml@0.18")[0] == "ruamel-yaml"
+
+
+def test_claim_uses_index_order(database: str) -> None:
+    conn = db.connect(database)
+    plan = " ".join(
+        str(tuple(r))
+        for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM jobs WHERE not_before <= 0 AND claimed_until <= 0 "
+            "ORDER BY priority, enqueued_at LIMIT 1"
+        )
+    )
+    assert "jobs_order" in plan
+    assert "TEMP B-TREE" not in plan
+
+
+def test_raising_priority_clears_backoff(database: str) -> None:
+    conn = db.connect(database)
+    jobs.enqueue(conn, "a", "1", jobs.PRIORITY_REFRESH)
+    job = jobs.claim(conn)
+    assert job is not None
+    jobs.retry_later(conn, job, "pypi down")
+    assert jobs.claim(conn) is None
+    jobs.enqueue(conn, "a", "1", jobs.PRIORITY_INTERACTIVE)
+    again = jobs.claim(conn)
+    assert again is not None and again.priority == jobs.PRIORITY_INTERACTIVE
+
+
+def test_unchanged_reresolve_does_not_bump_catalog(database: str, fake_pypi: FakePyPI) -> None:
+    fake_pypi.add("demo", "1.0", [("demo-1.0-py3-none-any.whl", sbom_wheel("demo", "1.0"))])
+    conn = db.connect(database)
+    _ingest(fake_pypi, "demo", "1.0")
+    first = store.catalog_version(conn)
+    _ingest(fake_pypi, "demo", "1.0")
+    assert store.catalog_version(conn) == first
+    fake_pypi.add("demo", "2.0", [("demo-2.0-py3-none-any.whl", sbom_wheel("demo", "2.0"))])
+    _ingest(fake_pypi, "demo", "2.0")
+    assert store.catalog_version(conn) == first + 1
+
+
+def test_usage_flush_failure_keeps_counts(database: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pypi_tea import usage as usage_mod
+
+    buf = usage_mod.UsageBuffer()
+    buf.query("demo", "1.0", None, None, True)
+
+    def locked(_conn: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(usage_mod.db, "begin", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        buf.flush()
+    monkeypatch.undo()
+    buf.flush()
+    stats = store.usage_stats(db.connect(database))
+    assert stats["top_packages"] == [{"package": "demo@1.0", "queries": 1}]

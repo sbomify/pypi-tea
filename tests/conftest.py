@@ -128,9 +128,13 @@ def sbom_wheel(name: str, version: str, sbom: dict[str, Any] | None = None, fill
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def tea_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """The real app on a free port, with an embedded worker resolving against live PyPI."""
+    """The real app on a free port, with an embedded worker resolving against live PyPI.
+
+    Module-scoped: its embedded worker must be stopped before other tests point
+    `settings.database_path` at their own databases.
+    """
     from pypi_tea.app import app
 
     path = str(tmp_path_factory.mktemp("tea") / "pypi-tea.db")
@@ -150,7 +154,7 @@ def tea_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     settings.database_path, settings.embedded_worker = original
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def tea_client(tea_server: str) -> Iterator[Any]:
     """Session-scoped TeaClient pointing at the in-process server."""
     from libtea.client import TeaClient

@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_error TEXT,
     UNIQUE (name, version)
 );
-CREATE INDEX IF NOT EXISTS jobs_ready ON jobs (priority, not_before, claimed_until, enqueued_at);
+-- Matches the claim query's ORDER BY, so a claim walks the index instead of sorting the queue.
+CREATE INDEX IF NOT EXISTS jobs_order ON jobs (priority, enqueued_at);
 
 CREATE TABLE IF NOT EXISTS usage_counts (
     kind TEXT NOT NULL,

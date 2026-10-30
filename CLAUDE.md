@@ -47,9 +47,9 @@ Request flow for a TEI/PURL: route handler → `lookup.ensure_release()` → sto
 - **`db.py`** — schema and connections. WAL mode; one read-only connection per thread (`db.reader`) and one read-write (`db.writer`)
 - **`store.py`** — all SQL: reads for the API, `save_release` for the worker, stats aggregates, `rebuild_listing`
 - **`jobs.py`** — queue on the `jobs` table: idempotent enqueue keyed by (name, version), leased claims, backoff
-- **`lookup.py`** — read-path helpers: `read()` runs a store query off the event loop; `ensure_release()` does bounded on-demand resolution; `memoized()` is a per-process TTL cache for aggregates
+- **`lookup.py`** — read-path helpers: `read()` runs a store query off the event loop; `ensure_release()` does bounded on-demand resolution; `memoized()` is a bounded, single-flight, per-process TTL cache for aggregates
 - **`ingest.py`** — resolve one release; reuses already-inspected wheels (immutable) and only re-checks non-final attestations
-- **`worker.py`** — `pypi-tea-worker`: N job loops plus a scheduler (listing rebuild every minute when data changed, weekly refresh)
+- **`worker.py`** — `pypi-tea-worker`: N job loops plus a scheduler (listing rebuild as soon as the catalog changes, at most a 10% duty cycle; weekly refresh)
 - **`tea.py`** — pure builders from stored records to `libtea.models`
 - **`usage.py`** — in-memory usage counters flushed to SQLite every 10 s
 - **`services/`** — `pypi.py` (JSON API, wheel platform filter), `wheel_reader.py` (async range-request ZIP reader), `sbom_format.py`, `attestation.py`, `uuids.py`

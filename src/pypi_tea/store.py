@@ -104,13 +104,30 @@ def get_sbom_content(conn: sqlite3.Connection, uuid: str) -> tuple[bytes, str] |
     return zlib.decompress(row["content"]), row["media_type"]
 
 
+# Listing families beyond the SBOM-format ones ('' = every release with an SBOM).
+ALL_PRODUCTS = "*products"
+ALL_RELEASES = "*releases"
+CATALOG_VERSION_KEY = "catalog_version"
+
+
+def _listing_page(conn: sqlite3.Connection, family: str, offset: int, limit: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT name, version, formats FROM listing WHERE family = ? AND pos > ? AND pos <= ? ORDER BY pos",
+        (family, offset, offset + limit),
+    ).fetchall()
+
+
+def _listing_count(conn: sqlite3.Connection, family: str) -> int:
+    row = conn.execute("SELECT max(pos) FROM listing WHERE family = ?", (family,)).fetchone()
+    return int(row[0] or 0)
+
+
 def list_products(conn: sqlite3.Connection, offset: int, limit: int) -> list[str]:
-    rows = conn.execute("SELECT DISTINCT name FROM releases ORDER BY name LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-    return [r["name"] for r in rows]
+    return [r["name"] for r in _listing_page(conn, ALL_PRODUCTS, offset, limit)]
 
 
 def count_products(conn: sqlite3.Connection) -> int:
-    return int(conn.execute("SELECT count(DISTINCT name) FROM releases").fetchone()[0])
+    return _listing_count(conn, ALL_PRODUCTS)
 
 
 def product_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -118,10 +135,11 @@ def product_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def list_release_keys(conn: sqlite3.Connection, offset: int, limit: int) -> list[tuple[str, str]]:
-    rows = conn.execute(
-        "SELECT name, version FROM releases ORDER BY name, version LIMIT ? OFFSET ?", (limit, offset)
-    ).fetchall()
-    return [(r["name"], r["version"]) for r in rows]
+    return [(r["name"], r["version"]) for r in _listing_page(conn, ALL_RELEASES, offset, limit)]
+
+
+def count_listed_releases(conn: sqlite3.Connection) -> int:
+    return _listing_count(conn, ALL_RELEASES)
 
 
 def count_releases(conn: sqlite3.Connection) -> int:
@@ -138,24 +156,29 @@ def product_release_versions(conn: sqlite3.Connection, name: str) -> list[str]:
 def packages_with_sbom(
     conn: sqlite3.Connection, family: str | None, offset: int, limit: int
 ) -> list[tuple[str, str, list[str]]]:
-    rows = conn.execute(
-        "SELECT name, version, formats FROM listing WHERE family = ? AND pos > ? AND pos <= ? ORDER BY pos",
-        (family or "", offset, offset + limit),
-    ).fetchall()
+    rows = _listing_page(conn, family or "", offset, limit)
     return [(r["name"], r["version"], r["formats"].split(",") if r["formats"] else []) for r in rows]
 
 
 def count_packages_with_sbom(conn: sqlite3.Connection, family: str | None) -> int:
-    row = conn.execute("SELECT max(pos) FROM listing WHERE family = ?", (family or "",)).fetchone()
-    return int(row[0] or 0)
+    return _listing_count(conn, family or "")
 
 
 def sbom_families(conn: sqlite3.Connection) -> list[str]:
-    return [r[0] for r in conn.execute("SELECT DISTINCT family FROM listing WHERE family != '' ORDER BY family")]
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT family FROM listing WHERE family NOT IN ('', ?, ?) ORDER BY family",
+            (ALL_PRODUCTS, ALL_RELEASES),
+        )
+    ]
 
 
 def rebuild_listing(conn: sqlite3.Connection) -> int:
-    """Recompute browse positions for releases with SBOMs. O(n); run by the worker, not per request."""
+    """Recompute browse positions for /packages, the sitemap, /products and /productReleases.
+
+    O(n) in releases; run by the worker when the catalog changes, never per request.
+    """
     begin(conn)
     try:
         conn.execute("DELETE FROM listing")
@@ -175,6 +198,22 @@ def rebuild_listing(conn: sqlite3.Connection) -> int:
             JOIN listing a ON a.family = '' AND a.name = f.name AND a.version = f.version
             """
         )
+        conn.execute(
+            """
+            INSERT INTO listing (family, pos, name, version, formats)
+            SELECT ?, row_number() OVER (ORDER BY name), name, '', ''
+            FROM (SELECT DISTINCT name FROM releases)
+            """,
+            (ALL_PRODUCTS,),
+        )
+        conn.execute(
+            """
+            INSERT INTO listing (family, pos, name, version, formats)
+            SELECT ?, row_number() OVER (ORDER BY name, version), name, version, ''
+            FROM releases
+            """,
+            (ALL_RELEASES,),
+        )
         n = int(conn.execute("SELECT count(*) FROM listing WHERE family = ''").fetchone()[0])
         conn.execute("COMMIT")
     except BaseException:
@@ -183,9 +222,9 @@ def rebuild_listing(conn: sqlite3.Connection) -> int:
     return n
 
 
-def last_resolved_at(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT max(resolved_at) FROM releases").fetchone()
-    return int(row[0] or 0)
+def catalog_version(conn: sqlite3.Connection) -> int:
+    """Bumped by save_release whenever the listing would change (new release, or a different SBOM set)."""
+    return int(get_meta(conn, CATALOG_VERSION_KEY) or 0)
 
 
 def all_product_names(conn: sqlite3.Connection) -> list[str]:
@@ -335,8 +374,27 @@ def save_release(conn: sqlite3.Connection, release: ReleaseRecord) -> None:
     """Replace everything stored for one release in a single transaction."""
     now = int(time.time())
     name, version = release.name, release.version
+    new_formats = sorted({(s.format) for w in release.wheels for s in w.sboms})
     begin(conn)
     try:
+        existed = (
+            conn.execute("SELECT 1 FROM releases WHERE name = ? AND version = ?", (name, version)).fetchone()
+            is not None
+        )
+        old_formats = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT format FROM sboms WHERE name = ? AND version = ? ORDER BY format", (name, version)
+            )
+        ]
+        if not existed or old_formats != new_formats:
+            conn.execute(
+                """
+                INSERT INTO meta (key, value) VALUES (?, '1')
+                ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+                """,
+                (CATALOG_VERSION_KEY,),
+            )
         conn.execute(
             """
             INSERT INTO releases (name, version, created, first_seen, resolved_at, has_sbom, info)

@@ -124,7 +124,7 @@ Since 26.10.0 (the switch to CalVer), pypi-tea stores everything in SQLite and n
 uvx --from 'pypi-tea[import-redis]' pypi-tea-refresh --import-redis redis://localhost:6379/0
 ```
 
-While a release is still queued, its package page answers `503` with `Retry-After`, so search engines retry rather than drop it. TEA UUIDs are deterministic and unchanged.
+While a release is still queued, its package page answers `503` with `Retry-After`, so search engines retry rather than drop it. TEA UUIDs are deterministic and unchanged, except for projects with a `.` in their name: names are now normalised as PyPI does (PEP 503), so `zope.interface` and `zope-interface` are one product, `zope-interface`, and old `/package/zope.interface/…` URLs redirect there.
 
 ## TEA endpoints
 

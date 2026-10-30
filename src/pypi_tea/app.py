@@ -131,7 +131,18 @@ _CACHE_RULES: tuple[tuple[str, str], ...] = (
     ("/attestation/", "public, max-age=3600, s-maxage=86400"),
     ("/stats", "public, max-age=60, s-maxage=60"),
 )
-_TEA_ENDPOINTS = ("discovery", "products", "product", "componentRelease", "component", "artifact")
+_TEA_ENDPOINTS = frozenset(
+    {
+        "discovery",
+        "products",
+        "product",
+        "productReleases",
+        "productRelease",
+        "component",
+        "componentRelease",
+        "artifact",
+    }
+)
 
 
 class EdgeMiddleware:

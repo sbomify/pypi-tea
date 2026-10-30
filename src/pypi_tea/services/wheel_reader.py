@@ -8,8 +8,10 @@ on the event loop — no thread pool, no blocking HTTP client.
 """
 
 import io
+import struct
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable
 
 import httpx
@@ -23,7 +25,21 @@ _MAX_ROUNDS = 16
 
 
 class WheelError(Exception):
-    """The wheel can't be read and retrying won't help (corrupt, oversized, unsupported)."""
+    """The wheel can't be read as-is.
+
+    `retryable` is False when the file itself is the problem (corrupt, unsupported
+    compression) and True when the host misbehaved (short reads, Range ignored,
+    a 4xx on the file); retryable failures are recorded but re-attempted on the
+    next resolve.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+# Exceptions zipfile/zlib raise on malformed archives.
+_ZIP_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, struct.error, NotImplementedError, OSError, ValueError)
 
 
 class _RangeNotSupported(Exception):
@@ -97,7 +113,7 @@ async def _fetch_range(client: httpx.AsyncClient, url: str, start: int, end: int
             raise _RangeNotSupported
         body = await resp.aread()
     if len(body) != end - start + 1:
-        raise WheelError(f"short range read: wanted {end - start + 1} bytes, got {len(body)}")
+        raise WheelError(f"short range read: wanted {end - start + 1} bytes, got {len(body)}", retryable=True)
     return body
 
 
@@ -130,10 +146,10 @@ async def _read_with_ranges(
             break
         except _MissingRange as missing:
             await fill(missing, TAIL_BYTES)
-        except zipfile.BadZipFile as e:
+        except _ZIP_ERRORS as e:
             raise WheelError(f"bad zip: {e}") from e
     if zf is None:
-        raise WheelError("central directory did not fit in the fetch budget")
+        raise WheelError("central directory did not fit in the fetch budget", retryable=True)
 
     out: dict[str, bytes] = {}
     for info in zf.infolist():
@@ -152,7 +168,7 @@ async def _read_with_ranges(
                 break
             except _MissingRange as missing:
                 await fill(missing, 64 * 1024)
-            except (zipfile.BadZipFile, NotImplementedError, OSError, ValueError) as e:
+            except _ZIP_ERRORS as e:
                 raise WheelError(f"cannot read {info.filename}: {e}") from e
     return out
 
@@ -165,7 +181,7 @@ async def _read_full_download(client: httpx.AsyncClient, url: str, want: Callabl
             async for chunk in resp.aiter_bytes(256 * 1024):
                 total += len(chunk)
                 if total > MAX_FULL_DOWNLOAD_BYTES:
-                    raise WheelError("host ignores Range and wheel exceeds the full-download limit")
+                    raise WheelError("host ignores Range and wheel exceeds the full-download limit", retryable=True)
                 tmp.write(chunk)
         tmp.seek(0)
         try:
@@ -175,7 +191,7 @@ async def _read_full_download(client: httpx.AsyncClient, url: str, want: Callabl
                     for i in zf.infolist()
                     if want(i.filename) and not i.is_dir() and i.file_size <= MAX_MEMBER_BYTES
                 }
-        except zipfile.BadZipFile as e:
+        except _ZIP_ERRORS as e:
             raise WheelError(f"bad zip: {e}") from e
 
 
@@ -184,14 +200,21 @@ async def read_members(
 ) -> dict[str, bytes]:
     """Return {member name: bytes} for every member `want` accepts.
 
-    Raises WheelError for permanent failures; httpx errors propagate so the
-    caller can retry transient network problems.
+    Raises WheelError when the wheel can't be read (see `retryable`). Network
+    errors, 5xx and 429 propagate so the job is retried.
     """
     try:
         if size is None:
             size = await _content_length(client, url)
         if size == 0:
             raise WheelError("empty file")
-        return await _read_with_ranges(client, url, size, want)
-    except _RangeNotSupported:
-        return await _read_full_download(client, url, want)
+        try:
+            return await _read_with_ranges(client, url, size, want)
+        except _RangeNotSupported:
+            return await _read_full_download(client, url, want)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if 400 <= status < 500 and status != 429:
+            # The file URL itself is refused or gone.
+            raise WheelError(f"HTTP {status} fetching wheel", retryable=True) from e
+        raise

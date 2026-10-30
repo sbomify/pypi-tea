@@ -19,7 +19,7 @@ from pypi_tea.usage import usage
 
 router = APIRouter()
 
-MAX_PAGE_SIZE = 500
+MAX_PAGE_SIZE = 100
 _404 = ErrorResponse(error=ErrorType.OBJECT_UNKNOWN).model_dump(by_alias=True)
 
 
@@ -172,7 +172,7 @@ async def list_or_search_product_releases(
         return _page([tea.dump(tea.product_release(release, wheels))], pageOffset, size, 1)
 
     keys = await read(store.list_release_keys, pageOffset, size)
-    total = await read(store.count_releases)
+    total = await read(store.count_listed_releases)
     results = []
     for name, version in keys:
         stored = await read(store.get_release, name, version)

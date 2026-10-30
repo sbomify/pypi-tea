@@ -28,6 +28,7 @@ from libtea.models import (
 )
 from libtea.server import tea_datetime_serializer
 from packageurl import PackageURL
+from packaging.utils import canonicalize_name
 
 from pypi_tea.config import settings
 from pypi_tea.models import ReleaseRecord, SbomRecord, WheelRecord
@@ -55,8 +56,10 @@ def parse_purl(purl_str: str) -> tuple[str, str | None, PurlQualifiers]:
     qualifiers = purl.qualifiers or {}
     if not isinstance(qualifiers, dict):
         qualifiers = {}
+    # PEP 503 normalisation, as PyPI does: `ruamel.yaml`, `Ruamel_YAML` and
+    # `ruamel-yaml` are one project and must map to one set of rows and UUIDs.
     return (
-        purl.name.lower(),
+        canonicalize_name(purl.name),
         purl.version,
         PurlQualifiers(os_name=qualifiers.get("os"), arch=qualifiers.get("arch")),
     )

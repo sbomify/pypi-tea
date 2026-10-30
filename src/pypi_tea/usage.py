@@ -53,8 +53,8 @@ class UsageBuffer:
         if not (counts or daily or recent):
             return
         conn = db.writer(settings.database_path)
-        db.begin(conn)
         try:
+            db.begin(conn)
             conn.executemany(
                 """
                 INSERT INTO usage_counts (kind, key, count) VALUES (?, ?, ?)
@@ -76,7 +76,14 @@ class UsageBuffer:
             )
             conn.execute("COMMIT")
         except BaseException:
-            conn.execute("ROLLBACK")
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            # Put the counts back so the next flush retries them instead of losing them.
+            with self._lock:
+                self._counts.update(counts)
+                self._daily.update(daily)
+                self._recent[:0] = recent
+                del self._recent[:-RECENT_MAX]
             raise
 
 

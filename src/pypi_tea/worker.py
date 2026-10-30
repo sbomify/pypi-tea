@@ -9,7 +9,6 @@ Run with `pypi-tea-worker`.
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import random
@@ -34,9 +33,18 @@ logger = logging.getLogger("pypi_tea.worker")
 
 IDLE_POLL_SECONDS = 0.25
 REFRESH_INTERVAL = 7 * 86400
-SCHEDULER_TICK = 60
+SCHEDULER_TICK = 2.0
+REFRESH_CHECK_INTERVAL = 600.0
+# Rebuild the listing promptly after a change, but leave the writer free at least
+# LISTING_DUTY_FACTOR times as long as the last rebuild took.
+LISTING_DUTY_FACTOR = 10
 _LAST_REFRESH_KEY = "last_refresh"
 _LISTING_BUILT_KEY = "listing_built_from"
+
+
+# Set when a job finishes so the scheduler checks the catalog straight away.
+# Created per run() so it's bound to the running event loop.
+_wake: asyncio.Event | None = None
 
 
 def make_client() -> httpx.AsyncClient:
@@ -77,7 +85,9 @@ async def run_job(client: httpx.AsyncClient, job: jobs.Job) -> None:
         if latest and not await asyncio.to_thread(_known, job.name, latest):
             await asyncio.to_thread(_enqueue, job.name, latest, job.priority)
         return
-    await ingest_release(client, job.name, job.version)
+    await ingest_release(client, job.name, job.version, final_attempt=job.attempts >= jobs.MAX_ATTEMPTS)
+    if _wake is not None:
+        _wake.set()
 
 
 async def _job_loop(client: httpx.AsyncClient, stop: asyncio.Event) -> None:
@@ -135,9 +145,12 @@ def _maybe_schedule_refresh() -> None:
 
 
 def _maybe_rebuild_listing() -> None:
-    """Rebuild the browse listing when anything was resolved since the last build."""
+    """Rebuild the browse listing when the catalog changed since the last build.
+
+    A re-resolve that changes nothing (the weekly refresh, mostly) doesn't count.
+    """
     conn = _conn()
-    latest = store.last_resolved_at(conn)
+    latest = store.catalog_version(conn)
     built = store.get_meta(conn, _LISTING_BUILT_KEY)
     if built is not None and int(built) >= latest:
         return
@@ -146,15 +159,39 @@ def _maybe_rebuild_listing() -> None:
     logger.info("rebuilt package listing (%d releases with SBOMs)", n)
 
 
-async def _scheduler(stop: asyncio.Event) -> None:
+async def _wait_for_any(*events: asyncio.Event, timeout: float) -> None:
+    waiters = [asyncio.ensure_future(e.wait()) for e in events]
+    try:
+        await asyncio.wait(waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+
+
+async def _scheduler(stop: asyncio.Event, wake: asyncio.Event) -> None:
+    next_listing = 0.0
+    next_refresh_check = 0.0
     while not stop.is_set():
-        for task in (_maybe_rebuild_listing, _maybe_schedule_refresh):
+        wake.clear()
+        now = time.monotonic()
+        if now >= next_listing:
             try:
-                await asyncio.to_thread(task)
+                await asyncio.to_thread(_maybe_rebuild_listing)
             except Exception:
-                logger.exception("scheduler task %s failed", task.__name__)
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=SCHEDULER_TICK)
+                logger.exception("listing rebuild failed")
+            took = time.monotonic() - now
+            next_listing = time.monotonic() + took * LISTING_DUTY_FACTOR
+        if now >= next_refresh_check:
+            try:
+                await asyncio.to_thread(_maybe_schedule_refresh)
+            except Exception:
+                logger.exception("refresh scheduling failed")
+            next_refresh_check = now + REFRESH_CHECK_INTERVAL
+        # Hold off until the next listing slot, then sleep until a job finishes or the tick ends.
+        hold = next_listing - time.monotonic()
+        if hold > 0:
+            await _wait_for_any(stop, timeout=min(hold, SCHEDULER_TICK))
+        await _wait_for_any(stop, wake, timeout=SCHEDULER_TICK)
 
 
 async def run(stop: asyncio.Event, concurrency: int | None = None, schedule: bool = True) -> None:
@@ -163,7 +200,9 @@ async def run(stop: asyncio.Event, concurrency: int | None = None, schedule: boo
     async with make_client() as client:
         tasks = [asyncio.create_task(_job_loop(client, stop)) for _ in range(n)]
         if schedule:
-            tasks.append(asyncio.create_task(_scheduler(stop)))
+            global _wake
+            _wake = asyncio.Event()
+            tasks.append(asyncio.create_task(_scheduler(stop, _wake)))
         logger.info("worker started (concurrency=%d, db=%s)", n, settings.database_path)
         try:
             await asyncio.gather(*tasks)

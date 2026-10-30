@@ -174,3 +174,41 @@ async def test_release_pypi_does_not_have_is_404(client: httpx.AsyncClient) -> N
     store.mark_missing(db.connect(settings.database_path), "ghost", "1.0")
     resp = await client.get("/discovery", params={"tei": "urn:tei:purl:x:pkg:pypi/ghost@1.0"})
     assert resp.status_code == 404
+
+
+async def test_non_canonical_package_url_redirects(client: httpx.AsyncClient) -> None:
+    resp = await client.get("/package/Ruamel.YAML/0.18.6")
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/package/ruamel-yaml/0.18.6"
+
+
+async def test_products_list_comes_from_listing(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", False), ("b", "2", False))
+    products = (await client.get("/products", params={"pageOffset": 1, "pageSize": 1})).json()
+    assert products["totalResults"] == 2
+    assert [p["name"] for p in products["results"]] == ["b"]
+    releases = (await client.get("/productReleases", params={"pageOffset": 0, "pageSize": 10})).json()
+    assert releases["totalResults"] == 3
+
+
+async def test_out_of_range_sitemap_shard_is_not_memoized(client: httpx.AsyncClient) -> None:
+    before = len(lookup._memo)
+    for n in range(5, 50):
+        assert (await client.get(f"/sitemap-{n}.xml")).status_code == 404
+    assert len(lookup._memo) <= before + 1
+
+
+async def test_memoized_single_flight(database: str) -> None:
+    calls = 0
+
+    def slow(_conn: object) -> int:
+        nonlocal calls
+        calls += 1
+        import time
+
+        time.sleep(0.1)
+        return 42
+
+    results = await asyncio.gather(*(lookup.memoized("sf-test", 60.0, slow) for _ in range(10)))
+    assert results == [42] * 10
+    assert calls == 1
