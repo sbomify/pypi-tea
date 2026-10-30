@@ -44,7 +44,9 @@ class Application(BaseApplication):
 def cli() -> None:
     parser = argparse.ArgumentParser(description="Run the pypi-tea API")
     parser.add_argument("--bind", default=settings.bind)
-    parser.add_argument("--workers", type=int, default=settings.web_workers or os.cpu_count() or 2)
+    # process_cpu_count honours cpusets, so inside a container it reports the CPUs
+    # actually granted rather than every CPU on the host.
+    parser.add_argument("--workers", type=int, default=settings.web_workers or os.process_cpu_count() or 2)
     args = parser.parse_args()
     Application(
         {
