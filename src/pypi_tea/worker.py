@@ -175,6 +175,8 @@ async def run(stop: asyncio.Event, concurrency: int | None = None, schedule: boo
 
 def cli() -> None:
     logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+    # httpx logs every request at INFO: several per wheel, thousands a minute during a backfill.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     async def main() -> None:
         stop = asyncio.Event()
