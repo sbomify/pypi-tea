@@ -224,3 +224,78 @@ async def test_memoized_single_flight(database: str) -> None:
     results = await asyncio.gather(*(lookup.memoized("sf-test", 60.0, slow) for _ in range(10)))
     assert results == [42] * 10
     assert calls == 1
+
+
+async def test_package_markdown_and_json(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("maturin", "1.8.1", True))
+    page = await client.get("/package/maturin/1.8.1")
+    assert '<link rel="alternate" type="text/markdown" href="/package/maturin/1.8.1.md"' in page.text
+    assert "Copy as Markdown" in page.text and "/static/js/page-tools.js" in page.text
+
+    canonical = f"{settings.server_root_url}/package/maturin/1.8.1"
+    resp = await client.get("/package/maturin/1.8.1.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert resp.headers["x-robots-tag"] == "noindex"
+    assert resp.headers["link"] == f'<{canonical}>; rel="canonical"'
+    assert "s-maxage" in resp.headers["cache-control"]
+    assert resp.text.startswith("# SBOM for maturin 1.8.1\n")
+    assert "`pkg:pypi/maturin@1.8.1`" in resp.text
+    assert f"]({settings.server_root_url}/artifact/" in resp.text
+    assert "\n\n\n" not in resp.text
+
+    data = (await client.get("/package/maturin/1.8.1.json")).json()
+    assert data["url"] == canonical and data["purl"] == "pkg:pypi/maturin@1.8.1"
+    assert data["formats"] == ["CycloneDX"]
+    assert data["wheels"][0]["sboms"][0]["download_url"].startswith(f"{settings.server_root_url}/artifact/")
+
+
+async def test_package_twins_redirect_and_404(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("plain", "1.0", False))
+    resp = await client.get("/package/Ruamel.YAML/0.18.md", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/package/ruamel-yaml/0.18.md"
+    assert (await client.get("/package/plain/1.0.md")).status_code == 404
+    assert (await client.get("/package/whatever/1.0.json")).status_code == 404
+    jobs.enqueue(db.connect(settings.database_path), "later", "1.0", jobs.PRIORITY_BACKFILL)
+    assert (await client.get("/package/later/1.0.md")).status_code == 503
+
+
+async def test_listing_markdown(
+    client: httpx.AsyncClient, fake_pypi: FakePyPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pages, "PAGE_SIZE", 2)
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", True), ("c", "1", True))
+    html = (await client.get("/packages?page=2")).text
+    assert 'type="text/markdown" href="/packages.md?page=2"' in html
+    page1 = await client.get("/packages.md")
+    assert page1.status_code == 200
+    assert page1.text.startswith("# PyPI packages with SBOMs\n\n3 Python packages")
+    assert page1.headers["x-robots-tag"] == "noindex"
+    assert f"({settings.server_root_url}/package/a/1)" in page1.text
+    assert f"Next page: {settings.server_root_url}/packages.md?page=2" in page1.text
+    page2 = (await client.get("/packages.md?format=CycloneDX&page=2")).text
+    assert "/package/c/1" in page2 and "/package/a/1" not in page2
+    assert f"Previous page: {settings.server_root_url}/packages.md?format=CycloneDX\n" in page2
+    assert (await client.get("/packages.md?page=9")).status_code == 404
+    assert (await client.get("/packages.md?format=Bogus")).status_code == 404
+
+
+async def test_dashboard_markdown_and_llms_txt(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", False))
+    assert 'type="text/markdown" href="/index.md"' in (await client.get("/")).text
+    home = await client.get("/index.md")
+    assert home.status_code == 200
+    assert home.headers["link"] == f'<{settings.server_root_url}/>; rel="canonical"'
+    assert "- Package versions explored: 2" in home.text
+    assert "CycloneDX/1.6 (1)" in home.text
+    llms = await client.get("/llms.txt")
+    assert llms.status_code == 200 and llms.headers["content-type"].startswith("text/plain")
+    assert llms.text.startswith("# pypi-tea\n")
+    assert f"{settings.server_root_url}/packages.md" in llms.text
+
+
+def test_markdown_escapes_third_party_text() -> None:
+    assert pages.md("[click](http://evil) <b>*hi*</b>\n# x") == r"\[click\](http://evil) \<b\>\*hi\*\</b\> \# x"
+    assert pages.md("x" * 20, limit=10) == "x" * 9 + "…"
+    assert pages.md_url("https://example.com/a b)") == "https://example.com/a%20b%29"

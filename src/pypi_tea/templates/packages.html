@@ -26,6 +26,7 @@
       <span class="eyebrow-chip">PyPI packages</span>
       <h1>{% if active_format %}{{ active_format }} SBOMs{% else %}Packages with SBOMs{% endif %}</h1>
       <p class="lede">{{ "{:,}".format(total) }} package{{ 's' if total != 1 else '' }} found</p>
+      {% include "_page_tools.html" %}
     </header>
 
     <nav class="segmented toolbar" aria-label="Filter by SBOM format">
@@ -67,11 +68,11 @@
     {% if total_pages > 1 %}
     <nav class="pagination" aria-label="Pagination">
       {% if page > 1 %}
-      <a href="/packages?page={{ page - 1 }}{% if active_format %}&format={{ active_format }}{% endif %}" class="btn btn-secondary" rel="prev" data-ph-event="package_list_paginated" data-ph-direction="previous">&larr; Previous</a>
+      <a href="/packages{{ prev_query }}" class="btn btn-secondary" rel="prev" data-ph-event="package_list_paginated" data-ph-direction="previous">&larr; Previous</a>
       {% endif %}
       <span>Page {{ page }} of {{ total_pages }}</span>
       {% if page < total_pages %}
-      <a href="/packages?page={{ page + 1 }}{% if active_format %}&format={{ active_format }}{% endif %}" class="btn btn-secondary" rel="next" data-ph-event="package_list_paginated" data-ph-direction="next">Next &rarr;</a>
+      <a href="/packages{{ next_query }}" class="btn btn-secondary" rel="next" data-ph-event="package_list_paginated" data-ph-direction="next">Next &rarr;</a>
       {% endif %}
     </nav>
     {% endif %}

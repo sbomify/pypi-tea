@@ -24,7 +24,9 @@ logger = logging.getLogger("pypi_tea.app")
 
 _STATIC_DIR = Path(__file__).parent / "static"
 # The dashboard is static apart from the version; its data loads from /stats.
-_INDEX_HTML = pages.render("index.html", nav="dashboard", analytics_page={"page_type": "dashboard"})
+_INDEX_HTML = pages.render(
+    "index.html", nav="dashboard", markdown_url="/index.md", analytics_page={"page_type": "dashboard"}
+)
 
 
 async def _flush_usage_forever() -> None:
@@ -104,7 +106,7 @@ app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "public, max-age=300, s-maxage=300"})
+    return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": pages.DASHBOARD_CACHE})
 
 
 @app.get("/healthz")

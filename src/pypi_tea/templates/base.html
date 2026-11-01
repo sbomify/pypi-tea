@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}pypi-tea{% endblock %}</title>
   {% block meta %}{% endblock %}
+  {% if markdown_url %}<link rel="alternate" type="text/markdown" href="{{ markdown_url }}" title="Markdown">{% endif %}
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#25293f">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32x32.png">
@@ -73,6 +74,7 @@
       <p>pypi-tea {{ app_version }}</p>
     </div>
   </footer>
+  {% if markdown_url %}<script src="/static/js/page-tools.js?v={{ app_version }}" defer></script>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -54,7 +54,7 @@ Request flow for a TEI/PURL: route handler → `lookup.ensure_release()` → sto
 - **`usage.py`** — in-memory usage counters flushed to SQLite every 10 s
 - **`analytics.py`** — PostHog events (queued, sent by a background thread; never raises). `EdgeMiddleware` binds the caller's anonymous id per request; browser events come from `templates/_analytics.html` and `data-ph-*` attributes
 - **`services/`** — `pypi.py` (JSON API, wheel platform filter), `wheel_reader.py` (async range-request ZIP reader), `sbom_format.py`, `attestation.py`, `uuids.py`
-- **`routes/`** — `tea.py` (all TEA endpoints), `pages.py` (HTML), `seo.py` (robots, sharded sitemap), `stats.py`
+- **`routes/`** — `tea.py` (all TEA endpoints), `pages.py` (HTML, plus a `.md` twin of every page, `.json` for package pages, and `/llms.txt`), `seo.py` (robots, sharded sitemap), `stats.py`
 
 ### Data model mapping
 
@@ -78,4 +78,5 @@ PyPI Package → TEA Product, Version → ProductRelease, Wheel file → Compone
 - `B008` ignored in ruff (FastAPI `Depends()` pattern)
 - gunicorn and uvicorn-worker have no type information — see the mypy overrides in `pyproject.toml`
 - Configuration via environment variables with `PYPI_TEA_` prefix
+- Every HTML page has a Markdown twin (`templates/*.md`, rendered without HTML autoescaping): pass third-party text through the `md` filter, and send twins with `twin_headers()` (`noindex` + canonical `Link`). A new page gets a twin and a `markdown_url`
 - HTML follows the sbomify design tokens (shared with sbomify.com): `templates/` extend `base.html`, styles live in the hand-written `static/css/site.css` (no build step, no Tailwind). Navy carries content, Signal Orange is the page's one call to action, status uses the semantic palette

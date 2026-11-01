@@ -1,0 +1,29 @@
+{#- Tools for people and their AI agents: copy or view the page as Markdown (or
+    JSON), open it in an assistant, copy the link. The Markdown is the page's own
+    `.md` twin, fetched on click. Needs `markdown_url`; `json_url` is optional. -#}
+{%- set md_abs = server_root_url ~ markdown_url %}
+{%- set page_url = canonical_url or (server_root_url ~ "/") %}
+{%- if name and version %}
+{%- set ask = "Read " ~ md_abs ~ " and explain the SBOM published for the Python package " ~ name ~ " " ~ version ~ ": its format, whether it validates, whether the wheels are attested, and how to fetch it over the Transparency Exchange API. Then tell me how I can use it to check my own project." %}
+{%- else %}
+{%- set ask = "Read " ~ md_abs ~ " and summarise which Python packages publish SBOMs in their wheels, and how I can fetch them over the Transparency Exchange API." %}
+{%- endif %}
+<div class="page-tools" role="toolbar" aria-label="Page tools">
+  <button class="btn btn-secondary btn-sm" type="button" data-copy-url="{{ markdown_url }}" data-done="Markdown copied" data-ph-event="page_tool_used" data-ph-tool="copy_markdown">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 01-1-1V4a1 1 0 011-1h10a1 1 0 011 1v1"/></svg>
+    <span>Copy as Markdown</span>
+  </button>
+  <details class="more-menu">
+    <summary class="btn btn-secondary btn-sm">More
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="menu-pop" role="menu">
+      <a role="menuitem" href="{{ markdown_url }}" rel="nofollow" data-ph-event="page_tool_used" data-ph-tool="view_markdown">View as Markdown</a>
+      {% if json_url %}<a role="menuitem" href="{{ json_url }}" rel="nofollow" data-ph-event="page_tool_used" data-ph-tool="view_json">View as JSON</a>{% endif %}
+      <a role="menuitem" href="https://claude.ai/new?q={{ ask | urlencode }}" target="_blank" rel="noopener nofollow" data-ph-event="page_tool_used" data-ph-tool="ask_claude">Ask Claude about this <span aria-hidden="true">↗</span></a>
+      <a role="menuitem" href="https://chatgpt.com/?q={{ ask | urlencode }}" target="_blank" rel="noopener nofollow" data-ph-event="page_tool_used" data-ph-tool="ask_chatgpt">Ask ChatGPT about this <span aria-hidden="true">↗</span></a>
+      <button role="menuitem" type="button" data-copy-text="{{ page_url }}" data-done="Link copied" data-ph-event="page_tool_used" data-ph-tool="copy_link">Copy link</button>
+    </div>
+  </details>
+  <span class="visually-hidden" aria-live="polite" data-copy-status></span>
+</div>

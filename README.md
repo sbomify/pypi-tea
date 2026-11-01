@@ -60,6 +60,12 @@ Nothing expires. The worker re-checks every known project for new releases once 
 
 `GET /` is a live dashboard; `GET /stats`, `/stats/timeseries`, `/stats/usage` and `/stats/invalid-sboms` return the raw JSON. They are computed from the tables above and cached for 60 s per process.
 
+### Pages for AI agents
+
+Every HTML page has a Markdown copy at the same URL plus `.md`, written for AI agents and LLM crawlers: `/package/<name>/<version>.md`, `/packages.md` (same `format` and `page` parameters) and `/index.md` for the dashboard. Package pages also have a JSON copy at `.json`. `/llms.txt` describes the site and these URLs.
+
+The copies say what the page says, so they must not compete with it in search: they are sent with `X-Robots-Tag: noindex` and `Link: <page URL>; rel="canonical"`, and stay out of the sitemap. Each HTML page points at its copy with `<link rel="alternate" type="text/markdown">`, and has page tools to copy it as Markdown, view it as Markdown or JSON, or open it in Claude or ChatGPT.
+
 ## Quick start
 
 ### Prerequisites

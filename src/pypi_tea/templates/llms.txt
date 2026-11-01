@@ -1,0 +1,29 @@
+# pypi-tea
+
+> SBOMs shipped inside Python wheels on PyPI (PEP 770), extracted, validated and served over the Transparency Exchange API (TEA). A free resource from sbomify (https://sbomify.com/), the Security Artifact Hub. Source: https://github.com/sbomify/pypi-tea
+
+Every package release with an SBOM has a page at {{ server_root_url }}/package/<name>/<version>, where <name> is the normalized PyPI project name (lowercase, runs of `-`, `_` and `.` become `-`).
+
+Machine-readable versions of every page:
+
+- Markdown: add `.md` to the page URL, for example {{ server_root_url }}/package/<name>/<version>.md and {{ server_root_url }}/packages.md. The dashboard is {{ server_root_url }}/index.md.
+- JSON (package pages): add `.json`, for example {{ server_root_url }}/package/<name>/<version>.json. It lists every SBOM with its format, validity, media type and download URL.
+- SBOM files: each page links to the raw SBOM downloads.
+
+## Browse
+
+- [Dashboard]({{ server_root_url }}/index.md): SBOM coverage, formats, validation and attestations across PyPI
+- [Packages with SBOMs]({{ server_root_url }}/packages.md): every indexed release that ships an SBOM, paginated
+- [CycloneDX SBOMs]({{ server_root_url }}/packages.md?format=CycloneDX)
+- [SPDX SBOMs]({{ server_root_url }}/packages.md?format=SPDX)
+
+## TEA API
+
+- Discovery: {{ server_root_url }}/.well-known/tea, API under {{ server_root_url }}/v{{ tea_spec_version }}/
+- Client: `pip install libtea`, then `python -m libtea {{ server_root_url }} pkg:pypi/<name>@<version>`
+- A release that hasn't been looked up before is fetched from PyPI on the first TEA query; the API may answer 503 with Retry-After while it is indexed.
+
+## Notes
+
+- Only SBOMs that package authors ship inside their wheels are listed; pypi-tea does not generate SBOMs.
+- Package metadata comes from PyPI.
