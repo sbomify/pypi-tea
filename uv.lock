@@ -863,7 +863,7 @@ wheels = [
 
 [[package]]
 name = "pypi-tea"
-version = "26.10.1"
+version = "26.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
