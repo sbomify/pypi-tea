@@ -45,11 +45,11 @@ Request flow for a TEI/PURL: route handler → `lookup.ensure_release()` → sto
 - **`serve.py`** — `pypi-tea-serve`: gunicorn with `reuse_port` and a uvicorn worker class that sets `limit_concurrency`
 - **`config.py`** — pydantic-settings with `PYPI_TEA_` env prefix
 - **`db.py`** — schema and connections. WAL mode; one read-only connection per thread (`db.reader`) and one read-write (`db.writer`)
-- **`store.py`** — all SQL: reads for the API, `save_release` for the worker, stats aggregates, `rebuild_listing`
+- **`store.py`** — all SQL: reads for the API, `save_release` for the worker (which also keeps `counters` and the `*products` / `*releases` listings current), `rebuild_listing` for the SBOM listings
 - **`jobs.py`** — queue on the `jobs` table: idempotent enqueue keyed by (name, version), leased claims, backoff
 - **`lookup.py`** — read-path helpers: `read()` runs a store query off the event loop; `ensure_release()` does bounded on-demand resolution; `memoized()` is a bounded, single-flight, per-process TTL cache for aggregates
 - **`ingest.py`** — resolve one release; reuses already-inspected wheels (immutable) and only re-checks non-final attestations
-- **`worker.py`** — `pypi-tea-worker`: N job loops plus a scheduler (listing rebuild as soon as the catalog changes, at most a 10% duty cycle; weekly refresh)
+- **`worker.py`** — `pypi-tea-worker`: N job loops plus a scheduler (SBOM listing rebuild as soon as the SBOM set changes, at most a 10% duty cycle; weekly refresh)
 - **`tea.py`** — pure builders from stored records to `libtea.models`
 - **`usage.py`** — in-memory usage counters flushed to SQLite every 10 s
 - **`analytics.py`** — PostHog events (queued, sent by a background thread; never raises). `EdgeMiddleware` binds the caller's anonymous id per request; browser events come from `templates/_analytics.html` and `data-ph-*` attributes
@@ -62,7 +62,7 @@ PyPI Package → TEA Product, Version → ProductRelease, Wheel file → Compone
 
 ### Scaling rules for changes
 
-- Read-path queries must be index lookups or index-ordered range scans. No `OFFSET` on large tables (use `listing.pos`), no unbounded scans per request; aggregates go through `memoized()`.
+- Read-path queries must be index lookups or index-ordered range scans. No `OFFSET` on large tables (use `listing.pos`), no unbounded scans per request; aggregates go through `memoized()`. Totals belong in `counters`, kept by `save_release`, not in a `count(*)` over a table. A schema change bumps `db.SCHEMA_VERSION` with a step in `db._migrate`.
 - Don't write to SQLite per request from the API; buffer like `usage.py` does.
 - Anything slow or upstream-dependent belongs in the worker.
 - `loadtest/` has a mock PyPI, a seeder and crawler-shaped load generators for checking changes under load.
