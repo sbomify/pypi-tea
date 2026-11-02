@@ -224,7 +224,7 @@ All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable a
 A systemd setup is included in `deploy/`:
 
 ```bash
-sudo ./deploy/setup.sh 26.10.1    # installs into /opt/pypi-tea, enables both services
+sudo ./deploy/setup.sh 26.11.0    # installs into /opt/pypi-tea, enables both services
 sudoedit /etc/default/pypi-tea   # PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
 sudo systemctl restart pypi-tea pypi-tea-worker
 ```
