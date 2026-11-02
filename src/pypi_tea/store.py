@@ -2,13 +2,15 @@
 
 Every read here is an indexed lookup or an index-ordered range scan; nothing on
 the read path sorts or scans a whole table. Writes happen in the worker, one
-release per transaction.
+release per transaction, and keep the `counters` behind /stats and the catalog
+listings current as they go.
 """
 
 import json
 import sqlite3
 import time
 import zlib
+from collections import Counter
 from typing import Any
 
 from pypi_tea.db import begin
@@ -142,10 +144,6 @@ def count_listed_releases(conn: sqlite3.Connection) -> int:
     return _listing_count(conn, ALL_RELEASES)
 
 
-def count_releases(conn: sqlite3.Connection) -> int:
-    return int(conn.execute("SELECT count(*) FROM releases").fetchone()[0])
-
-
 def product_release_versions(conn: sqlite3.Connection, name: str) -> list[str]:
     rows = conn.execute(
         "SELECT version FROM releases WHERE name = ? ORDER BY created DESC, version DESC", (name,)
@@ -175,13 +173,15 @@ def sbom_families(conn: sqlite3.Connection) -> list[str]:
 
 
 def rebuild_listing(conn: sqlite3.Connection) -> int:
-    """Recompute browse positions for /packages, the sitemap, /products and /productReleases.
+    """Recompute the name-ordered browse positions for /packages and the sitemap.
 
-    O(n) in releases; run by the worker when the catalog changes, never per request.
+    O(n) in releases with an SBOM, a small fraction of the catalog; run by the worker
+    when the SBOM set changes, never per request. /products and /productReleases are
+    appended to by save_release and not touched here.
     """
     begin(conn)
     try:
-        conn.execute("DELETE FROM listing")
+        conn.execute("DELETE FROM listing WHERE family NOT IN (?, ?)", (ALL_PRODUCTS, ALL_RELEASES))
         conn.execute(
             """
             INSERT INTO listing (family, pos, name, version, formats)
@@ -198,22 +198,6 @@ def rebuild_listing(conn: sqlite3.Connection) -> int:
             JOIN listing a ON a.family = '' AND a.name = f.name AND a.version = f.version
             """
         )
-        conn.execute(
-            """
-            INSERT INTO listing (family, pos, name, version, formats)
-            SELECT ?, row_number() OVER (ORDER BY name), name, '', ''
-            FROM (SELECT DISTINCT name FROM releases)
-            """,
-            (ALL_PRODUCTS,),
-        )
-        conn.execute(
-            """
-            INSERT INTO listing (family, pos, name, version, formats)
-            SELECT ?, row_number() OVER (ORDER BY name, version), name, version, ''
-            FROM releases
-            """,
-            (ALL_RELEASES,),
-        )
         n = int(conn.execute("SELECT count(*) FROM listing WHERE family = ''").fetchone()[0])
         conn.execute("COMMIT")
     except BaseException:
@@ -222,8 +206,42 @@ def rebuild_listing(conn: sqlite3.Connection) -> int:
     return n
 
 
+def rebuild_catalog_listing(conn: sqlite3.Connection) -> None:
+    """Lay out /products and /productReleases in discovery order, the order save_release appends in.
+
+    O(n) in releases. Only run when migrating a store; the caller holds the transaction.
+    """
+    conn.execute("DELETE FROM listing WHERE family IN (?, ?)", (ALL_PRODUCTS, ALL_RELEASES))
+    conn.execute(
+        """
+        INSERT INTO listing (family, pos, name, version, formats)
+        SELECT ?, row_number() OVER (ORDER BY min(first_seen), name), name, '', ''
+        FROM releases GROUP BY name
+        """,
+        (ALL_PRODUCTS,),
+    )
+    conn.execute(
+        """
+        INSERT INTO listing (family, pos, name, version, formats)
+        SELECT ?, row_number() OVER (ORDER BY first_seen, name, version), name, version, ''
+        FROM releases
+        """,
+        (ALL_RELEASES,),
+    )
+
+
+def _append_listing(conn: sqlite3.Connection, family: str, name: str, version: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO listing (family, pos, name, version, formats)
+        SELECT ?, coalesce(max(pos), 0) + 1, ?, ?, '' FROM listing WHERE family = ?
+        """,
+        (family, name, version, family),
+    )
+
+
 def catalog_version(conn: sqlite3.Connection) -> int:
-    """Bumped by save_release whenever the listing would change (new release, or a different SBOM set)."""
+    """Bumped by save_release whenever a release's SBOM formats change, i.e. the SBOM listings would."""
     return int(get_meta(conn, CATALOG_VERSION_KEY) or 0)
 
 
@@ -239,30 +257,16 @@ def all_release_keys(conn: sqlite3.Connection) -> list[tuple[str, str]]:
 
 
 def stats(conn: sqlite3.Connection) -> dict[str, Any]:
-    pkg_total = count_releases(conn)
-    pkg_with_sbom = int(conn.execute("SELECT count(*) FROM releases WHERE has_sbom = 1").fetchone()[0])
-    wheel_rows = {r[0]: r[1] for r in conn.execute("SELECT has_sbom, count(*) FROM wheels GROUP BY has_sbom")}
-    wheels_with = int(wheel_rows.get(1, 0))
-    wheels_without = int(wheel_rows.get(0, 0))
+    counts: dict[str, dict[str, int]] = {}
+    for kind, key, n in conn.execute("SELECT kind, key, n FROM counters WHERE n != 0"):
+        counts.setdefault(kind, {})[key] = int(n)
+    releases = counts.get("releases", {})
+    pkg_total = releases.get("total", 0)
+    pkg_with_sbom = releases.get("with_sbom", 0)
+    wheels = counts.get("wheels", {})
+    wheels_with = wheels.get("with_sbom", 0)
+    wheels_without = wheels.get("without_sbom", 0)
     wheels_total = wheels_with + wheels_without
-
-    formats = {r[0]: r[1] for r in conn.execute("SELECT format, count(*) FROM sboms GROUP BY format")}
-    validation: dict[str, int] = {}
-    for valid, n in conn.execute("SELECT valid, count(*) FROM sboms GROUP BY valid"):
-        validation["valid" if valid else "invalid"] = n
-    encodings = {r[0]: r[1] for r in conn.execute("SELECT media_type, count(*) FROM sboms GROUP BY media_type")}
-    attestations: dict[str, int] = {}
-    publishers: dict[str, int] = {}
-    for status, kind, n in conn.execute(
-        """
-        SELECT json_extract(attestation, '$.status'), json_extract(attestation, '$.publisher_kind'), count(*)
-        FROM wheels WHERE attestation IS NOT NULL GROUP BY 1, 2
-        """
-    ):
-        if status:
-            attestations[status] = attestations.get(status, 0) + n
-        if kind:
-            publishers[kind] = publishers.get(kind, 0) + n
 
     return {
         "packages": {
@@ -277,11 +281,11 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "without_sbom": wheels_without,
             "sbom_percentage": round(wheels_with / wheels_total * 100, 2) if wheels_total else None,
         },
-        "sbom_formats": formats,
-        "sbom_validation": validation,
-        "sbom_encodings": encodings,
-        "attestations": attestations,
-        "attestation_publishers": publishers,
+        "sbom_formats": counts.get("sbom_format", {}),
+        "sbom_validation": counts.get("sbom_validation", {}),
+        "sbom_encodings": counts.get("sbom_encoding", {}),
+        "attestations": counts.get("attestation", {}),
+        "attestation_publishers": counts.get("publisher", {}),
     }
 
 
@@ -291,34 +295,19 @@ TIMESERIES_DAYS = 30
 
 def stats_timeseries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     since = (int(time.time()) // DAY - TIMESERIES_DAYS) * DAY
-    series: list[dict[str, Any]] = []
-    rows = conn.execute(
-        """
-        SELECT first_seen / ? * ? AS day, count(*) AS explored, sum(has_sbom) AS with_sbom
-        FROM releases WHERE first_seen >= ? GROUP BY day ORDER BY day
-        """,
-        (DAY, DAY, since),
-    ).fetchall()
-    formats_by_day: dict[int, dict[str, int]] = {}
-    for day, fmt, n in conn.execute(
-        """
-        SELECT r.first_seen / ? * ? AS day, s.format, count(*)
-        FROM sboms s JOIN releases r ON r.name = s.name AND r.version = s.version
-        WHERE r.first_seen >= ? GROUP BY day, s.format
-        """,
-        (DAY, DAY, since),
+    days: dict[int, dict[str, Any]] = {}
+    for day, kind, key, n in conn.execute(
+        "SELECT day, kind, key, n FROM daily_counters WHERE day >= ? AND n != 0 ORDER BY day", (since,)
     ):
-        formats_by_day.setdefault(int(day), {})[fmt] = n
-    for r in rows:
-        day = int(r["day"])
-        series.append(
-            {
-                "timestamp": day,
-                "packages": {"new_explored": r["explored"], "new_with_sbom": r["with_sbom"] or 0},
-                "sbom_formats": formats_by_day.get(day, {}),
-            }
+        entry = days.setdefault(
+            int(day),
+            {"timestamp": int(day), "packages": {"new_explored": 0, "new_with_sbom": 0}, "sbom_formats": {}},
         )
-    return series
+        if kind == "format":
+            entry["sbom_formats"][key] = int(n)
+        else:
+            entry["packages"]["new_" + kind] = int(n)
+    return [d for d in days.values() if d["packages"]["new_explored"]]
 
 
 def invalid_sboms(conn: sqlite3.Connection) -> list[dict[str, str]]:
@@ -367,6 +356,108 @@ def usage_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+# --- counters ---
+
+Totals = Counter[tuple[str, str]]
+Daily = Counter[tuple[int, str, str]]
+
+
+def _contribution(conn: sqlite3.Connection, name: str, version: str) -> tuple[Totals, Daily]:
+    """What one release's stored rows add to `counters` and `daily_counters`. Index reads only."""
+    totals: Totals = Counter()
+    daily: Daily = Counter()
+    row = conn.execute(
+        "SELECT has_sbom, first_seen FROM releases WHERE name = ? AND version = ?", (name, version)
+    ).fetchone()
+    if row is None:
+        return totals, daily
+    day = int(row["first_seen"]) // DAY * DAY
+    totals["releases", "total"] += 1
+    totals["releases", "with_sbom"] += int(row["has_sbom"])
+    daily[day, "explored", ""] += 1
+    daily[day, "with_sbom", ""] += int(row["has_sbom"])
+    for has_sbom, status, kind in conn.execute(
+        """
+        SELECT has_sbom, json_extract(attestation, '$.status'), json_extract(attestation, '$.publisher_kind')
+        FROM wheels WHERE name = ? AND version = ?
+        """,
+        (name, version),
+    ):
+        totals["wheels", "with_sbom" if has_sbom else "without_sbom"] += 1
+        if status:
+            totals["attestation", status] += 1
+        if kind:
+            totals["publisher", kind] += 1
+    for fmt, valid, media_type in conn.execute(
+        "SELECT format, valid, media_type FROM sboms WHERE name = ? AND version = ?", (name, version)
+    ):
+        totals["sbom_format", fmt] += 1
+        totals["sbom_validation", "valid" if valid else "invalid"] += 1
+        totals["sbom_encoding", media_type] += 1
+        daily[day, "format", fmt] += 1
+    return totals, daily
+
+
+def _apply_counts(conn: sqlite3.Connection, totals: Totals, daily: Daily) -> None:
+    conn.executemany(
+        "INSERT INTO counters (kind, key, n) VALUES (?, ?, ?) ON CONFLICT (kind, key) DO UPDATE SET n = n + excluded.n",
+        [(kind, key, n) for (kind, key), n in totals.items() if n],
+    )
+    conn.executemany(
+        """
+        INSERT INTO daily_counters (day, kind, key, n) VALUES (?, ?, ?, ?)
+        ON CONFLICT (day, kind, key) DO UPDATE SET n = n + excluded.n
+        """,
+        [(day, kind, key, n) for (day, kind, key), n in daily.items() if n],
+    )
+
+
+# Every counter recomputed from the tables, for migration. Mirrors _contribution.
+_RECOUNT = (
+    "DELETE FROM counters",
+    "DELETE FROM daily_counters",
+    "INSERT INTO counters SELECT 'releases', 'total', count(*) FROM releases",
+    "INSERT INTO counters SELECT 'releases', 'with_sbom', coalesce(sum(has_sbom), 0) FROM releases",
+    """
+    INSERT INTO counters
+    SELECT 'wheels', CASE WHEN has_sbom THEN 'with_sbom' ELSE 'without_sbom' END, count(*) FROM wheels GROUP BY 2
+    """,
+    "INSERT INTO counters SELECT 'sbom_format', format, count(*) FROM sboms GROUP BY format",
+    """
+    INSERT INTO counters
+    SELECT 'sbom_validation', CASE WHEN valid THEN 'valid' ELSE 'invalid' END, count(*) FROM sboms GROUP BY 2
+    """,
+    "INSERT INTO counters SELECT 'sbom_encoding', media_type, count(*) FROM sboms GROUP BY media_type",
+    """
+    INSERT INTO counters SELECT 'attestation', s, count(*)
+    FROM (SELECT json_extract(attestation, '$.status') AS s FROM wheels)
+    WHERE s IS NOT NULL AND s != '' GROUP BY s
+    """,
+    """
+    INSERT INTO counters SELECT 'publisher', k, count(*)
+    FROM (SELECT json_extract(attestation, '$.publisher_kind') AS k FROM wheels)
+    WHERE k IS NOT NULL AND k != '' GROUP BY k
+    """,
+    f"""
+    INSERT INTO daily_counters SELECT first_seen / {DAY} * {DAY}, 'explored', '', count(*) FROM releases GROUP BY 1
+    """,
+    f"""
+    INSERT INTO daily_counters
+    SELECT first_seen / {DAY} * {DAY}, 'with_sbom', '', sum(has_sbom) FROM releases GROUP BY 1
+    """,
+    f"""
+    INSERT INTO daily_counters SELECT r.first_seen / {DAY} * {DAY}, 'format', s.format, count(*)
+    FROM sboms s JOIN releases r ON r.name = s.name AND r.version = s.version GROUP BY 1, 3
+    """,
+)
+
+
+def recount(conn: sqlite3.Connection) -> None:
+    """Recompute every counter from the tables. O(n) in the whole store; the caller holds the transaction."""
+    for statement in _RECOUNT:
+        conn.execute(statement)
+
+
 # --- writes ---
 
 
@@ -377,17 +468,16 @@ def save_release(conn: sqlite3.Connection, release: ReleaseRecord) -> None:
     new_formats = sorted({(s.format) for w in release.wheels for s in w.sboms})
     begin(conn)
     try:
-        existed = (
-            conn.execute("SELECT 1 FROM releases WHERE name = ? AND version = ?", (name, version)).fetchone()
-            is not None
-        )
+        existed = release_exists(conn, name, version)
+        new_product = not existed and not product_exists(conn, name)
+        old_totals, old_daily = _contribution(conn, name, version)
         old_formats = [
             r[0]
             for r in conn.execute(
                 "SELECT DISTINCT format FROM sboms WHERE name = ? AND version = ? ORDER BY format", (name, version)
             )
         ]
-        if not existed or old_formats != new_formats:
+        if old_formats != new_formats:
             conn.execute(
                 """
                 INSERT INTO meta (key, value) VALUES (?, '1')
@@ -458,6 +548,14 @@ def save_release(conn: sqlite3.Connection, release: ReleaseRecord) -> None:
                 )
                 entities.append((artifact_uuid(w.url, s.path), "artifact", name, version, w.url))
         conn.executemany("INSERT OR REPLACE INTO entities VALUES (?, ?, ?, ?, ?)", entities)
+        if new_product:
+            _append_listing(conn, ALL_PRODUCTS, name, "")
+        if not existed:
+            _append_listing(conn, ALL_RELEASES, name, version)
+        new_totals, new_daily = _contribution(conn, name, version)
+        new_totals.subtract(old_totals)
+        new_daily.subtract(old_daily)
+        _apply_counts(conn, new_totals, new_daily)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

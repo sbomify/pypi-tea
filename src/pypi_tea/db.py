@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS releases (
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS sboms (
     content BLOB NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS sboms_wheel ON sboms (wheel_url);
-CREATE INDEX IF NOT EXISTS sboms_release ON sboms (name, version);
+-- Covers the listing rebuild's GROUP BY, which would otherwise read every row's content.
+CREATE INDEX IF NOT EXISTS sboms_release_format ON sboms (name, version, format);
 CREATE INDEX IF NOT EXISTS sboms_family ON sboms (family, name, version);
 
 -- Deterministic UUID -> (kind, release, wheel) for every TEA entity.
@@ -106,9 +107,11 @@ CREATE TABLE IF NOT EXISTS usage_recent (
     entry TEXT NOT NULL
 );
 
--- Materialised browse order for /packages and the sitemap, rebuilt by the worker.
--- family = '' is the unfiltered listing. pos is dense from 1, so any page is a
--- primary-key range read rather than an OFFSET scan.
+-- Materialised browse order, so any page is a primary-key range read rather than
+-- an OFFSET scan. pos is dense from 1. The SBOM families ('' = every release with
+-- an SBOM, then one per format family) are sorted by name and rebuilt by the
+-- worker. '*products' and '*releases' cover the whole catalog, so save_release
+-- appends to them in discovery order instead of anything rewriting them.
 CREATE TABLE IF NOT EXISTS listing (
     family TEXT NOT NULL,
     pos INTEGER NOT NULL,
@@ -116,6 +119,24 @@ CREATE TABLE IF NOT EXISTS listing (
     version TEXT NOT NULL,
     formats TEXT NOT NULL,
     PRIMARY KEY (family, pos)
+) WITHOUT ROWID;
+
+-- Running totals for /stats, adjusted by save_release in the same transaction so
+-- the dashboard reads a few rows instead of scanning releases, wheels and sboms.
+CREATE TABLE IF NOT EXISTS counters (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    PRIMARY KEY (kind, key)
+) WITHOUT ROWID;
+
+-- The same, bucketed by the UTC day a release was first seen, for /stats/timeseries.
+CREATE TABLE IF NOT EXISTS daily_counters (
+    day INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    PRIMARY KEY (day, kind, key)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -155,9 +176,34 @@ def init_schema(path: str) -> None:
     conn = connect(path)
     try:
         conn.executescript(_SCHEMA)
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _migrate(conn)
     finally:
         conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an older store up to SCHEMA_VERSION. The API and the worker may both start at once,
+    so the version is re-read under the write lock and only one of them does the work."""
+    from pypi_tea import store  # store imports this module
+
+    if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= SCHEMA_VERSION:
+        return
+    # Backfilling a large store holds the write lock for a while; a process starting
+    # alongside should wait for it rather than fail its startup.
+    conn.execute("PRAGMA busy_timeout=900000")
+    begin(conn)
+    try:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version < 2:
+            # 2: /stats reads counters, the catalog listings are appended to instead of rebuilt.
+            conn.execute("DROP INDEX IF EXISTS sboms_release")  # a prefix of sboms_release_format
+            store.recount(conn)
+            store.rebuild_catalog_listing(conn)
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def reader(path: str) -> sqlite3.Connection:

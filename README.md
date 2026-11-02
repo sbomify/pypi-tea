@@ -49,7 +49,8 @@ A single SQLite database in WAL mode, so any number of API processes read while 
 | `wheels` | Every wheel of a release: digests, size, attestation result, and an error if it couldn't be read |
 | `sboms` | Every SBOM found: format, validity, media type, SHA-256, and the content (zlib-compressed) |
 | `entities` | Deterministic TEA UUID → product / release / component / artifact |
-| `listing` | Materialised browse order for `/packages` and the sitemap, rebuilt by the worker. Any page is a primary-key range read |
+| `listing` | Materialised browse order, so any page is a primary-key range read. `/packages` and the sitemap are rebuilt by the worker when the set of SBOMs changes; `/products` and `/productReleases` are appended to as releases are discovered |
+| `counters`, `daily_counters` | Running totals behind `/stats`, updated in the same transaction as each release |
 | `jobs` | Work queue: interactive lookups (priority 0) ahead of backfill (5) and scheduled refresh (9). Claims are leases, so a crashed worker's job is picked up again |
 | `missing` | Releases PyPI says don't exist, retried after an hour |
 | `usage_*` | Query counters for the dashboard, buffered in memory and flushed every 10 s |
@@ -58,7 +59,7 @@ Nothing expires. The worker re-checks every known project for new releases once 
 
 ### Statistics
 
-`GET /` is a live dashboard; `GET /stats`, `/stats/timeseries`, `/stats/usage` and `/stats/invalid-sboms` return the raw JSON. They are computed from the tables above and cached for 60 s per process.
+`GET /` is a live dashboard; `GET /stats`, `/stats/timeseries`, `/stats/usage` and `/stats/invalid-sboms` return the raw JSON. They read running totals that the worker keeps as it stores each release, so they cost the same however large the catalog grows, and are cached for 60 s per process.
 
 ### Pages for AI agents
 

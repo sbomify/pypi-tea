@@ -167,7 +167,7 @@ def _maybe_schedule_refresh() -> None:
 
 
 def _maybe_rebuild_listing() -> None:
-    """Rebuild the browse listing when the catalog changed since the last build.
+    """Rebuild the SBOM listings when a release's SBOM formats changed since the last build.
 
     A re-resolve that changes nothing (the weekly refresh, mostly) doesn't count.
     """
