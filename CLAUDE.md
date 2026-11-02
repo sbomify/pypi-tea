@@ -29,8 +29,11 @@ uv run pytest tests/test_conformance.py::test_tea_conformance[check_name] -v
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 
-# Type check (strict mode with pydantic plugin)
-uv run mypy src/
+# Type check (strict mode with pydantic plugin): src/, tests/ and loadtest/, as CI does
+uv run mypy
+
+# Run ruff and mypy before every commit
+uvx pre-commit install
 ```
 
 ## Architecture
@@ -74,7 +77,7 @@ PyPI Package → TEA Product, Version → ProductRelease, Wheel file → Compone
 ## Conventions
 
 - Ruff for linting and formatting (line length 120, Python 3.14 target)
-- mypy strict mode with pydantic plugin
+- mypy strict mode with pydantic plugin, over `src/`, `tests/` and `loadtest/` (the `files` setting in `pyproject.toml`). Tests are typed too: annotate fixtures and test functions
 - `B008` ignored in ruff (FastAPI `Depends()` pattern)
 - gunicorn and uvicorn-worker have no type information — see the mypy overrides in `pyproject.toml`
 - Configuration via environment variables with `PYPI_TEA_` prefix

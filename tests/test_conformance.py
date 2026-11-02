@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 from libtea.conformance._checks import ALL_CHECKS, CheckContext
 from libtea.conformance._types import CheckStatus
@@ -6,12 +8,12 @@ TEI = "urn:tei:purl:localhost:pkg:pypi/libtea@0.4.0"
 
 
 @pytest.fixture(scope="session")
-def check_context():
+def check_context() -> CheckContext:
     return CheckContext(tei=TEI)
 
 
 @pytest.mark.parametrize("check_fn", ALL_CHECKS, ids=[fn.__name__ for fn in ALL_CHECKS])
-def test_tea_conformance(tea_client, check_context, check_fn):
+def test_tea_conformance(tea_client: Any, check_context: CheckContext, check_fn: Any) -> None:
     result = check_fn(tea_client, check_context)
     if result.status == CheckStatus.SKIP:
         pytest.skip(result.message)
