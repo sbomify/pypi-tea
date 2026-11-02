@@ -320,7 +320,7 @@ def test_usage_flush_failure_keeps_counts(database: str, monkeypatch: pytest.Mon
     def locked(_conn: object) -> None:
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(usage_mod.db, "begin", locked)
+    monkeypatch.setattr(db, "begin", locked)
     with pytest.raises(sqlite3.OperationalError):
         buf.flush()
     monkeypatch.undo()

@@ -254,8 +254,11 @@ uv run ruff check src/ tests/
 # Format
 uv run ruff format src/ tests/
 
-# Type check
-uv run mypy src/
+# Type check (strict; src/, tests/ and loadtest/)
+uv run mypy
+
+# Run ruff and mypy before every commit
+uvx pre-commit install
 ```
 
 ### Conformance

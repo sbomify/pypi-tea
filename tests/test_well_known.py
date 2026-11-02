@@ -1,5 +1,7 @@
 """Tests for /.well-known/tea, version probe, versioned route prefix, and artifact download."""
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
 
@@ -10,54 +12,54 @@ PURL = "pkg:pypi/libtea@0.4.0"
 
 
 @pytest.fixture()
-def client(tea_server):
+def client(tea_server: str) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=tea_server, timeout=10.0) as c:
         yield c
 
 
 class TestWellKnownTea:
-    def test_returns_valid_document(self, client: httpx.Client):
+    def test_returns_valid_document(self, client: httpx.Client) -> None:
         resp = client.get("/.well-known/tea")
         assert resp.status_code == 200
         data = resp.json()
         assert data["schemaVersion"] == 1
         assert len(data["endpoints"]) >= 1
 
-    def test_endpoint_has_url_and_version(self, client: httpx.Client):
+    def test_endpoint_has_url_and_version(self, client: httpx.Client) -> None:
         data = client.get("/.well-known/tea").json()
         ep = data["endpoints"][0]
         assert ep["url"] == settings.server_root_url
         assert settings.tea_spec_version in ep["versions"]
         assert ep["priority"] == 1.0
 
-    def test_cache_header(self, client: httpx.Client):
+    def test_cache_header(self, client: httpx.Client) -> None:
         resp = client.get("/.well-known/tea")
         assert "max-age=3600" in resp.headers.get("cache-control", "")
 
 
 class TestVersionProbe:
-    def test_head_returns_200(self, client: httpx.Client):
+    def test_head_returns_200(self, client: httpx.Client) -> None:
         resp = client.head(f"/v{settings.tea_spec_version}")
         assert resp.status_code == 200
 
-    def test_get_returns_version(self, client: httpx.Client):
+    def test_get_returns_version(self, client: httpx.Client) -> None:
         resp = client.get(f"/v{settings.tea_spec_version}")
         assert resp.status_code == 200
         assert resp.json()["version"] == settings.tea_spec_version
 
 
 class TestVersionedRoutes:
-    def test_discovery_under_version_prefix(self, client: httpx.Client):
+    def test_discovery_under_version_prefix(self, client: httpx.Client) -> None:
         resp = client.get(f"/v{settings.tea_spec_version}/discovery", params={"tei": TEI})
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_discovery_unversioned_still_works(self, client: httpx.Client):
+    def test_discovery_unversioned_still_works(self, client: httpx.Client) -> None:
         resp = client.get("/discovery", params={"tei": TEI})
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_versioned_product_404(self, client: httpx.Client):
+    def test_versioned_product_404(self, client: httpx.Client) -> None:
         """Versioned route returns proper 404 for unknown UUID, not a routing 404."""
         fake_uuid = "00000000-0000-0000-0000-000000000000"
         resp = client.get(f"/v{settings.tea_spec_version}/product/{fake_uuid}")
@@ -65,7 +67,7 @@ class TestVersionedRoutes:
         data = resp.json()
         assert "error" in data
 
-    def test_versioned_cache_headers(self, client: httpx.Client):
+    def test_versioned_cache_headers(self, client: httpx.Client) -> None:
         resp = client.get(f"/v{settings.tea_spec_version}/discovery", params={"tei": TEI})
         assert "max-age=3600" in resp.headers.get("cache-control", "")
 
@@ -85,9 +87,9 @@ class TestArtifactDownload:
         collection = resp.json()
         artifacts = collection.get("artifacts", [])
         assert len(artifacts) > 0, "libtea@0.4.0 should have at least one SBOM artifact"
-        return artifacts[0]["uuid"]
+        return str(artifacts[0]["uuid"])
 
-    def test_artifact_url_points_to_self(self, client: httpx.Client):
+    def test_artifact_url_points_to_self(self, client: httpx.Client) -> None:
         """Artifact format URL should point to pypi-tea's download endpoint, not PyPI CDN."""
         a_uuid = self._get_artifact_uuid(client)
         resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}")
@@ -98,7 +100,7 @@ class TestArtifactDownload:
         assert "/download" in url
         assert "files.pythonhosted.org" not in url
 
-    def test_download_returns_sbom_content(self, client: httpx.Client):
+    def test_download_returns_sbom_content(self, client: httpx.Client) -> None:
         """GET /artifact/{uuid}/download should return actual SBOM content."""
         a_uuid = self._get_artifact_uuid(client)
         resp = client.get(f"/v{settings.tea_spec_version}/artifact/{a_uuid}/download")
@@ -110,7 +112,7 @@ class TestArtifactDownload:
         data = resp.json()
         assert "bomFormat" in data or "spdxVersion" in data
 
-    def test_artifact_has_sha256_checksum(self, client: httpx.Client):
+    def test_artifact_has_sha256_checksum(self, client: httpx.Client) -> None:
         """Artifact format should include a SHA-256 checksum matching the SBOM content."""
         import hashlib
 
@@ -130,7 +132,7 @@ class TestArtifactDownload:
         expected = hashlib.sha256(download_resp.content).hexdigest()
         assert sha256_entry["algValue"] == expected
 
-    def test_download_unknown_uuid_returns_404(self, client: httpx.Client):
+    def test_download_unknown_uuid_returns_404(self, client: httpx.Client) -> None:
         fake_uuid = "00000000-0000-0000-0000-000000000000"
         resp = client.get(f"/v{settings.tea_spec_version}/artifact/{fake_uuid}/download")
         assert resp.status_code == 404

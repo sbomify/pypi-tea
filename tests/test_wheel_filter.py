@@ -35,12 +35,12 @@ WHEELS = [
 ]
 
 
-def test_no_filter_returns_all():
+def test_no_filter_returns_all() -> None:
     result = filter_wheels_by_platform(WHEELS)
     assert len(result) == len(WHEELS)
 
 
-def test_os_linux_filters_correctly():
+def test_os_linux_filters_correctly() -> None:
     result = filter_wheels_by_platform(WHEELS, os_filter="linux")
     filenames = [w.filename for w in result]
     assert any("manylinux" in f for f in filenames)
@@ -50,7 +50,7 @@ def test_os_linux_filters_correctly():
     assert len(result) == 3  # 2 linux + 1 any
 
 
-def test_os_darwin_alias():
+def test_os_darwin_alias() -> None:
     result = filter_wheels_by_platform(WHEELS, os_filter="darwin")
     filenames = [w.filename for w in result]
     assert any("macosx" in f for f in filenames)
@@ -58,7 +58,7 @@ def test_os_darwin_alias():
     assert len(result) == 2  # 1 macosx + 1 any
 
 
-def test_os_windows():
+def test_os_windows() -> None:
     result = filter_wheels_by_platform(WHEELS, os_filter="windows")
     filenames = [w.filename for w in result]
     assert any("win" in f for f in filenames)
@@ -66,7 +66,7 @@ def test_os_windows():
     assert len(result) == 2  # 1 win + 1 any
 
 
-def test_arch_x86_64():
+def test_arch_x86_64() -> None:
     result = filter_wheels_by_platform(WHEELS, arch_filter="x86_64")
     filenames = [w.filename for w in result]
     assert any("x86_64" in f or "amd64" in f for f in filenames)
@@ -75,14 +75,14 @@ def test_arch_x86_64():
     assert len(result) == 3
 
 
-def test_arch_amd64_alias():
+def test_arch_amd64_alias() -> None:
     result = filter_wheels_by_platform(WHEELS, arch_filter="amd64")
     filenames = [w.filename for w in result]
     assert any("x86_64" in f or "amd64" in f for f in filenames)
     assert len(result) == 3
 
 
-def test_arch_arm64():
+def test_arch_arm64() -> None:
     result = filter_wheels_by_platform(WHEELS, arch_filter="arm64")
     filenames = [w.filename for w in result]
     assert any("aarch64" in f or "arm64" in f for f in filenames)
@@ -91,7 +91,7 @@ def test_arch_arm64():
     assert len(result) == 3
 
 
-def test_os_and_arch_combined():
+def test_os_and_arch_combined() -> None:
     result = filter_wheels_by_platform(WHEELS, os_filter="linux", arch_filter="aarch64")
     filenames = [w.filename for w in result]
     assert len(result) == 2  # linux aarch64 + any
@@ -99,20 +99,20 @@ def test_os_and_arch_combined():
     assert any("any" in f for f in filenames)
 
 
-def test_os_and_arch_no_match():
+def test_os_and_arch_no_match() -> None:
     result = filter_wheels_by_platform(WHEELS, os_filter="windows", arch_filter="aarch64")
     # Only the pure-python wheel matches
     assert len(result) == 1
     assert "any" in result[0].filename
 
 
-def test_pure_python_always_included():
+def test_pure_python_always_included() -> None:
     pure = [WHEELS[-1]]  # requests any
     result = filter_wheels_by_platform(pure, os_filter="linux", arch_filter="x86_64")
     assert len(result) == 1
 
 
-def test_unparseable_filename_included_as_fallback():
+def test_unparseable_filename_included_as_fallback() -> None:
     wheels = [
         WheelInfo(filename="weird-package.whl", url="https://example.com/weird.whl", digests={}, size=100),
         WHEELS[0],  # linux x86_64
@@ -123,14 +123,14 @@ def test_unparseable_filename_included_as_fallback():
     assert len(result) == 1  # only the unparseable one, not linux
 
 
-def test_parse_purl_without_qualifiers():
+def test_parse_purl_without_qualifiers() -> None:
     name, version, qualifiers = parse_purl("pkg:pypi/requests@2.31.0")
     assert name == "requests"
     assert version == "2.31.0"
     assert qualifiers == PurlQualifiers(os_name=None, arch=None)
 
 
-def test_parse_purl_with_os_qualifier():
+def test_parse_purl_with_os_qualifier() -> None:
     name, version, qualifiers = parse_purl("pkg:pypi/numpy@1.26.0?os=linux")
     assert name == "numpy"
     assert version == "1.26.0"
@@ -138,7 +138,7 @@ def test_parse_purl_with_os_qualifier():
     assert qualifiers.arch is None
 
 
-def test_parse_purl_with_both_qualifiers():
+def test_parse_purl_with_both_qualifiers() -> None:
     name, version, qualifiers = parse_purl("pkg:pypi/numpy@1.26.0?os=linux&arch=x86_64")
     assert name == "numpy"
     assert version == "1.26.0"

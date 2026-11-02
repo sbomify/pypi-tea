@@ -41,7 +41,9 @@ def make_request(with_sbom: int, total: int) -> tuple[str, str]:
     return "sitemap", "/sitemap.xml"
 
 
-async def worker(client, deadline, stats, args):
+async def worker(
+    client: httpx.AsyncClient, deadline: float, stats: dict[str, list[tuple[float, str]]], args: argparse.Namespace
+) -> None:
     while time.monotonic() < deadline:
         kind, path = make_request(args.with_sbom, args.total)
         t0 = time.monotonic()

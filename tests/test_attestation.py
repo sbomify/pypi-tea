@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -61,7 +62,7 @@ SAMPLE_PROVENANCE = {
 # --- fetch_provenance tests ---
 
 
-def test_fetch_provenance_200():
+def test_fetch_provenance_200() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = SAMPLE_PROVENANCE
@@ -76,7 +77,7 @@ def test_fetch_provenance_200():
     assert "/integrity/cryptography/44.0.3/" in call_args[0][0]
 
 
-def test_fetch_provenance_404():
+def test_fetch_provenance_404() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 404
 
@@ -87,7 +88,7 @@ def test_fetch_provenance_404():
     assert result is None
 
 
-def test_fetch_provenance_server_error_raises_for_retry():
+def test_fetch_provenance_server_error_raises_for_retry() -> None:
     """A 5xx must not be recorded as "no provenance" — the ingest job retries instead."""
     request = httpx.Request("GET", "https://pypi.org/integrity/pkg/1.0.0/x.whl/provenance")
     client = AsyncMock(spec=httpx.AsyncClient)
@@ -97,7 +98,7 @@ def test_fetch_provenance_server_error_raises_for_retry():
         asyncio.run(fetch_provenance(client, "pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl"))
 
 
-def test_fetch_provenance_http_error_propagates():
+def test_fetch_provenance_http_error_propagates() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get.side_effect = httpx.ConnectError("connection refused")
 
@@ -109,7 +110,7 @@ def test_fetch_provenance_http_error_propagates():
 
 
 @patch("pypi_tea.services.attestation.Provenance")
-def test_verify_provenance_verified(mock_provenance_cls):
+def test_verify_provenance_verified(mock_provenance_cls: MagicMock) -> None:
     mock_attestation = MagicMock()
     mock_attestation.verify.return_value = ("https://docs.pypi.org/attestations/publish/v1", None)
     mock_attestation.certificate_claims = {"1.3.6.1.4.1.57264.1.12": "https://github.com/pyca/cryptography"}
@@ -140,7 +141,7 @@ def test_verify_provenance_verified(mock_provenance_cls):
 
 
 @patch("pypi_tea.services.attestation.Provenance")
-def test_verify_provenance_failed(mock_provenance_cls):
+def test_verify_provenance_failed(mock_provenance_cls: MagicMock) -> None:
     from pypi_attestations import VerificationError
 
     mock_attestation = MagicMock()
@@ -164,7 +165,7 @@ def test_verify_provenance_failed(mock_provenance_cls):
 
 
 @patch("pypi_tea.services.attestation.Provenance")
-def test_verify_provenance_empty_bundles(mock_provenance_cls):
+def test_verify_provenance_empty_bundles(mock_provenance_cls: MagicMock) -> None:
     mock_provenance = MagicMock()
     mock_provenance.attestation_bundles = []
     mock_provenance_cls.model_validate.return_value = mock_provenance
@@ -178,7 +179,7 @@ def test_verify_provenance_empty_bundles(mock_provenance_cls):
 SHA = SAMPLE_WHEEL.digests["sha256"]
 
 
-def _settings(enabled: bool = True):
+def _settings(enabled: bool = True) -> Any:
     patcher = patch("pypi_tea.services.attestation.settings")
     mock_settings = patcher.start()
     mock_settings.attestation_verification = enabled
@@ -186,7 +187,7 @@ def _settings(enabled: bool = True):
     return patcher
 
 
-def test_check_wheel_attestation_disabled():
+def test_check_wheel_attestation_disabled() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     patcher = _settings(enabled=False)
     try:
@@ -197,7 +198,7 @@ def test_check_wheel_attestation_disabled():
     client.get.assert_not_called()
 
 
-def test_check_wheel_attestation_not_available():
+def test_check_wheel_attestation_not_available() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     client = AsyncMock(spec=httpx.AsyncClient)
@@ -210,7 +211,7 @@ def test_check_wheel_attestation_not_available():
     assert result.status == "not_available"
 
 
-def test_check_wheel_attestation_no_sha256():
+def test_check_wheel_attestation_no_sha256() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = SAMPLE_PROVENANCE
@@ -225,7 +226,7 @@ def test_check_wheel_attestation_no_sha256():
     assert "SHA-256" in (result.error or "")
 
 
-def test_check_wheel_attestation_unexpected_error():
+def test_check_wheel_attestation_unexpected_error() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get.side_effect = RuntimeError("something went wrong")
     patcher = _settings()
@@ -237,7 +238,7 @@ def test_check_wheel_attestation_unexpected_error():
     assert result.error is not None
 
 
-def test_check_wheel_attestation_transport_error_propagates():
+def test_check_wheel_attestation_transport_error_propagates() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     client.get.side_effect = httpx.ReadTimeout("slow")
     patcher = _settings()
@@ -251,7 +252,7 @@ def test_check_wheel_attestation_transport_error_propagates():
 # --- AttestationResult serialization tests ---
 
 
-def test_attestation_result_roundtrip():
+def test_attestation_result_roundtrip() -> None:
     result = AttestationResult(
         status="verified",
         publisher_kind="GitHub",
@@ -266,7 +267,7 @@ def test_attestation_result_roundtrip():
     assert restored == result
 
 
-def test_attestation_result_minimal():
+def test_attestation_result_minimal() -> None:
     result = AttestationResult(status="not_available")
     d = result.to_dict()
     assert d == {"status": "not_available"}

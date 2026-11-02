@@ -32,7 +32,7 @@ jobs:
         run: uv run ruff format --check src/ tests/
 
       - name: Run mypy
-        run: uv run mypy src/
+        run: uv run mypy
 
   test:
     name: Test
