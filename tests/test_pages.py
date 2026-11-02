@@ -1,6 +1,8 @@
 """HTML pages, listing, sitemap, robots, stats, and read-path backpressure."""
 
 import asyncio
+import sqlite3
+import time
 from collections.abc import AsyncIterator
 from xml.etree import ElementTree
 
@@ -224,6 +226,52 @@ async def test_memoized_single_flight(database: str) -> None:
     results = await asyncio.gather(*(lookup.memoized("sf-test", 60.0, slow) for _ in range(10)))
     assert results == [42] * 10
     assert calls == 1
+
+
+async def test_memoized_survives_a_caller_that_gives_up(database: str) -> None:
+    calls = 0
+
+    def slow(_conn: object) -> int:
+        nonlocal calls
+        calls += 1
+        time.sleep(0.3)
+        return 42
+
+    # The first caller hits its deadline, as a request does when an aggregate is slow.
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(lookup.memoized("cancel-test", 60.0, slow), timeout=0.05)
+    # Callers already waiting, and later ones, still get the one computation's result.
+    results = await asyncio.gather(*(lookup.memoized("cancel-test", 60.0, slow) for _ in range(5)))
+    assert results == [42] * 5
+    assert calls == 1
+    assert await lookup.memoized("cancel-test", 60.0, slow) == 42
+    assert calls == 1
+
+
+async def test_memoized_serves_stale_while_refreshing(database: str) -> None:
+    values = iter([1, 2])
+    fail = False
+
+    def compute(_conn: object) -> int:
+        time.sleep(0.1)
+        if fail:
+            raise sqlite3.OperationalError("database is locked")
+        return next(values)
+
+    assert await lookup.memoized("stale-test", 0.01, compute) == 1
+    await asyncio.sleep(0.02)
+    started = time.monotonic()
+    assert await lookup.memoized("stale-test", 0.01, compute) == 1  # expired: stale value, refresh started
+    assert time.monotonic() - started < 0.05
+    await lookup._inflight["stale-test"]
+    assert await lookup.memoized("stale-test", 60.0, compute) == 2
+
+    # A refresh that fails keeps the last good value.
+    fail = True
+    await asyncio.sleep(0.02)
+    assert await lookup.memoized("stale-test", 0.01, compute) == 2
+    await asyncio.gather(lookup._inflight["stale-test"], return_exceptions=True)
+    assert await lookup.memoized("stale-test", 0.01, compute) == 2
 
 
 async def test_package_markdown_and_json(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:

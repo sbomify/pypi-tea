@@ -14,7 +14,7 @@ import uvicorn
 
 from pypi_tea import db
 from pypi_tea.config import settings
-from pypi_tea.lookup import _memo
+from pypi_tea.lookup import _inflight, _memo
 
 # Never send test traffic to PostHog; tests that exercise analytics install a fake client.
 settings.posthog_api_key = ""
@@ -30,9 +30,11 @@ def database(tmp_path: Path) -> Iterator[str]:
     settings.database_path = path
     db.init_schema(path)
     _memo.clear()
+    _inflight.clear()
     yield path
     settings.database_path = original
     _memo.clear()
+    _inflight.clear()
 
 
 def make_wheel(members: dict[str, bytes], filler: int = 0) -> bytes:

@@ -7,6 +7,7 @@ limit the request is shed with 503 + Retry-After instead of piling up.
 """
 
 import asyncio
+import logging
 import sqlite3
 import time
 from collections.abc import Callable
@@ -16,6 +17,8 @@ from anyio import to_thread
 from pypi_tea import db, jobs, store
 from pypi_tea.config import settings
 from pypi_tea.models import ReleaseRecord
+
+logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 0.2
 MAX_WAITERS_PER_PROCESS = 64
@@ -97,7 +100,7 @@ async def ensure_release(name: str, version: str) -> ReleaseRecord | None:
 
 MEMO_MAX_ENTRIES = 256
 _memo: dict[str, tuple[float, object]] = {}
-_inflight: dict[str, asyncio.Future[object]] = {}
+_inflight: dict[str, asyncio.Task[object]] = {}
 
 
 async def memoized[T](key: str, ttl: float, fn: Callable[..., T], *args: object) -> T:
@@ -105,25 +108,38 @@ async def memoized[T](key: str, ttl: float, fn: Callable[..., T], *args: object)
 
     Concurrent misses for the same key share one computation, and the cache is
     bounded so caller-influenced keys can't grow it without limit.
+
+    The computation runs as its own task rather than in the first caller's, so a
+    caller that gives up (the request deadline, a client that went away) neither
+    fails the others waiting on it nor throws the result away: it still lands in
+    the cache. Once a value exists, an expired entry is served stale while a
+    single refresh runs in the background, so a slow aggregate holds up a request
+    only the first time it is computed.
     """
     hit = _memo.get(key)
     if hit is not None and time.monotonic() - hit[0] < ttl:
         return hit[1]  # type: ignore[return-value]
-    pending = _inflight.get(key)
-    if pending is not None:
-        return await asyncio.shield(pending)  # type: ignore[arg-type]
-    future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
-    _inflight[key] = future
-    try:
-        value = await read(fn, *args)
-    except BaseException as e:
-        future.set_exception(e)
-        future.exception()  # mark retrieved when nobody else is waiting
-        raise
-    finally:
-        _inflight.pop(key, None)
-    future.set_result(value)
-    if len(_memo) >= MEMO_MAX_ENTRIES:
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_compute(key, fn, args))
+        _inflight[key] = task
+        task.add_done_callback(lambda t: _finished(key, t))
+    if hit is not None:
+        return hit[1]  # type: ignore[return-value]
+    return await asyncio.shield(task)  # type: ignore[arg-type]
+
+
+async def _compute(key: str, fn: Callable[..., object], args: tuple[object, ...]) -> object:
+    value = await read(fn, *args)
+    if key not in _memo and len(_memo) >= MEMO_MAX_ENTRIES:
         _memo.pop(next(iter(_memo)))
     _memo[key] = (time.monotonic(), value)
     return value
+
+
+def _finished(key: str, task: asyncio.Task[object]) -> None:
+    _inflight.pop(key, None)
+    # Retrieve the exception even when nobody awaited it (a background refresh), so
+    # asyncio doesn't report it as never retrieved. The stale value stays cached.
+    if not task.cancelled() and (e := task.exception()) is not None:
+        logger.warning("computing %s failed: %r", key, e)
