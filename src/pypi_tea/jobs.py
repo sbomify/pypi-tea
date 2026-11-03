@@ -96,6 +96,14 @@ def retry_later(conn: sqlite3.Connection, job: Job, error: str) -> bool:
     return True
 
 
+def defer(conn: sqlite3.Connection, job: Job, seconds: int) -> None:
+    """Release the claim without counting the attempt: a busy database says nothing about the job."""
+    conn.execute(
+        "UPDATE jobs SET claimed_until = 0, not_before = ?, attempts = max(attempts - 1, 0) WHERE id = ?",
+        (int(time.time()) + seconds, job.id),
+    )
+
+
 def pending_interactive(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT count(*) FROM jobs WHERE priority = ?", (PRIORITY_INTERACTIVE,)).fetchone()
     return int(row[0])

@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from conftest import CDX, FakePyPI, make_wheel, sbom_wheel
-from pypi_tea import db, jobs, store
+from pypi_tea import db, jobs, store, worker
 from pypi_tea.ingest import ingest_release
 from pypi_tea.services.wheel_reader import WheelError, read_members
 from pypi_tea.worker import run_job
@@ -202,6 +202,80 @@ def test_retry_backs_off_then_gives_up(database: str) -> None:
     exhausted = jobs.Job(id=job.id, name="a", version="1", priority=9, attempts=jobs.MAX_ATTEMPTS)
     assert not jobs.retry_later(conn, exhausted, "boom")
     assert jobs.depth(conn) == {}
+
+
+def test_defer_releases_without_spending_an_attempt(database: str) -> None:
+    conn = db.connect(database)
+    jobs.enqueue(conn, "a", "1", jobs.PRIORITY_REFRESH)
+    job = jobs.claim(conn)
+    assert job is not None and job.attempts == 1
+    jobs.defer(conn, job, 60)
+    assert jobs.claim(conn) is None, "deferred job waits for not_before"
+    conn.execute("UPDATE jobs SET not_before = 0")
+    again = jobs.claim(conn)
+    assert again is not None and again.attempts == 1
+
+
+def _busy() -> sqlite3.OperationalError:
+    e = sqlite3.OperationalError("database is locked")
+    e.sqlite_errorcode = sqlite3.SQLITE_BUSY
+    return e
+
+
+def test_busy_database_defers_the_job_and_the_loop_survives(database: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lock contention is not the release's fault: no attempt is spent, and a failing claim doesn't end the loop."""
+    conn = db.connect(database)
+    jobs.enqueue(conn, "a", "1", jobs.PRIORITY_REFRESH)
+    stop = asyncio.Event()
+    claims = 0
+    real_claim = worker._claim
+
+    def flaky_claim() -> jobs.Job | None:
+        nonlocal claims
+        claims += 1
+        if claims == 1:
+            raise _busy()
+        if claims > 3:
+            stop.set()
+        return real_claim()
+
+    async def busy_job(client: httpx.AsyncClient, job: jobs.Job) -> None:
+        raise _busy()
+
+    monkeypatch.setattr(worker, "_claim", flaky_claim)
+    monkeypatch.setattr(worker, "run_job", busy_job)
+    monkeypatch.setattr(worker, "IDLE_POLL_SECONDS", 0.01)
+
+    async def run() -> None:
+        async with httpx.AsyncClient() as client:
+            await asyncio.wait_for(worker._job_loop(client, stop), 5)
+
+    asyncio.run(run())
+    row = conn.execute("SELECT attempts, claimed_until, not_before, last_error FROM jobs").fetchone()
+    assert row["attempts"] == 0, "a busy database must not count as an attempt"
+    assert row["claimed_until"] == 0
+    assert row["not_before"] > time.time()
+    assert row["last_error"] is None
+
+
+def test_concurrent_writers_queue_instead_of_timing_out(database: str) -> None:
+    """With a short busy_timeout, threads racing in SQLite's busy handler give up; queued on write_lock they don't."""
+    holds, threads = 0.05, 8
+
+    def write(i: int) -> None:
+        conn = db.writer(database)
+        conn.execute("PRAGMA busy_timeout=100")
+        with db.write_lock:
+            db.begin(conn)
+            jobs.enqueue(conn, f"p{i}", "1", jobs.PRIORITY_REFRESH)
+            time.sleep(holds)
+            conn.execute("COMMIT")
+
+    async def run() -> None:
+        await asyncio.gather(*(asyncio.to_thread(write, i) for i in range(threads)))
+
+    asyncio.run(run())
+    assert sum(jobs.depth(db.connect(database)).values()) == threads
 
 
 # --- review regressions ---

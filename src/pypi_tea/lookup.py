@@ -48,7 +48,8 @@ async def read[T](fn: Callable[..., T], *args: object) -> T:
 
 async def write[T](fn: Callable[..., T], *args: object) -> T:
     def call() -> T:
-        return fn(db.writer(settings.database_path), *args)
+        with db.write_lock:
+            return fn(db.writer(settings.database_path), *args)
 
     return await to_thread.run_sync(call)
 

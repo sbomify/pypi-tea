@@ -16,6 +16,7 @@ import signal
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from importlib.metadata import version as pkg_version
 
 import httpx
@@ -32,6 +33,8 @@ else:
 logger = logging.getLogger("pypi_tea.worker")
 
 IDLE_POLL_SECONDS = 0.25
+# A job that only failed because the database was busy goes back on the queue this soon.
+BUSY_RETRY_SECONDS = 5
 REFRESH_INTERVAL = 7 * 86400
 SCHEDULER_TICK = 2.0
 REFRESH_CHECK_INTERVAL = 600.0
@@ -60,19 +63,28 @@ def _conn() -> sqlite3.Connection:
 
 
 def _claim() -> jobs.Job | None:
-    return jobs.claim(_conn())
+    with db.write_lock:
+        return jobs.claim(_conn())
 
 
 def _complete(job: jobs.Job) -> None:
-    jobs.complete(_conn(), job)
+    with db.write_lock:
+        jobs.complete(_conn(), job)
 
 
 def _retry(job: jobs.Job, error: str) -> bool:
-    return jobs.retry_later(_conn(), job, error)
+    with db.write_lock:
+        return jobs.retry_later(_conn(), job, error)
+
+
+def _defer(job: jobs.Job) -> None:
+    with db.write_lock:
+        jobs.defer(_conn(), job, BUSY_RETRY_SECONDS)
 
 
 def _enqueue(name: str, version: str, priority: int) -> None:
-    jobs.enqueue(_conn(), name, version, priority)
+    with db.write_lock:
+        jobs.enqueue(_conn(), name, version, priority)
 
 
 def _known(name: str, version: str) -> bool:
@@ -112,7 +124,13 @@ async def run_job(client: httpx.AsyncClient, job: jobs.Job) -> None:
 
 async def _job_loop(client: httpx.AsyncClient, stop: asyncio.Event) -> None:
     while not stop.is_set():
-        job = await asyncio.to_thread(_claim)
+        try:
+            job = await asyncio.to_thread(_claim)
+        except sqlite3.OperationalError as e:
+            # A busy database must not end the loop: gather() would take the whole worker down with it.
+            logger.warning("claiming a job failed: %s", e)
+            await asyncio.sleep(IDLE_POLL_SECONDS * (0.5 + random.random()))
+            continue
         if job is None:
             # Jitter so idle loops don't poll in lockstep.
             await asyncio.sleep(IDLE_POLL_SECONDS * (0.5 + random.random()))
@@ -120,20 +138,41 @@ async def _job_loop(client: httpx.AsyncClient, stop: asyncio.Event) -> None:
         try:
             await run_job(client, job)
         except Exception as e:
-            kept = await asyncio.to_thread(_retry, job, f"{type(e).__name__}: {e}")
-            log = logger.warning if kept else logger.error
-            # Several httpx errors (ConnectTimeout, ReadError) stringify to "".
-            log(
-                "job %s@%s failed (attempt %d%s): %s: %s",
-                job.name,
-                job.version,
-                job.attempts,
-                "" if kept else ", giving up",
-                type(e).__name__,
-                e,
-            )
+            await _settle_failed(job, e)
         else:
-            await asyncio.to_thread(_complete, job)
+            await _settle(_complete, job)
+
+
+async def _settle_failed(job: jobs.Job, e: Exception) -> None:
+    if db.is_busy(e):
+        # Contention, not a problem with the release: retry soon without spending an attempt.
+        logger.info("job %s@%s deferred: %s", job.name, job.version, e)
+        await _settle(_defer, job)
+        return
+    try:
+        kept = await asyncio.to_thread(_retry, job, f"{type(e).__name__}: {e}")
+    except sqlite3.OperationalError as release_error:
+        logger.warning("job %s@%s: releasing it failed, its lease will lapse: %s", job.name, job.version, release_error)
+        kept = True
+    log = logger.warning if kept else logger.error
+    # Several httpx errors (ConnectTimeout, ReadError) stringify to "".
+    log(
+        "job %s@%s failed (attempt %d%s): %s: %s",
+        job.name,
+        job.version,
+        job.attempts,
+        "" if kept else ", giving up",
+        type(e).__name__,
+        e,
+    )
+
+
+async def _settle(fn: Callable[[jobs.Job], object], job: jobs.Job) -> None:
+    """Record a job's outcome. If even that fails, the lease lapses and the job runs again, which is safe."""
+    try:
+        await asyncio.to_thread(fn, job)
+    except sqlite3.OperationalError as e:
+        logger.warning("job %s@%s: recording the outcome failed, its lease will lapse: %s", job.name, job.version, e)
 
 
 def enqueue_refresh(existing: bool = True, limit: int = 0) -> tuple[int, int]:
@@ -176,8 +215,9 @@ def _maybe_rebuild_listing() -> None:
     built = store.get_meta(conn, _LISTING_BUILT_KEY)
     if built is not None and int(built) >= latest:
         return
-    n = store.rebuild_listing(conn)
-    store.set_meta(conn, _LISTING_BUILT_KEY, str(latest))
+    with db.write_lock:
+        n = store.rebuild_listing(conn)
+        store.set_meta(conn, _LISTING_BUILT_KEY, str(latest))
     logger.info("rebuilt package listing (%d releases with SBOMs)", n)
 
 

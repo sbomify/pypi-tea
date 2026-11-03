@@ -148,11 +148,13 @@ def _previous(name: str, version: str) -> ReleaseRecord | None:
 
 
 def _save(release: ReleaseRecord) -> None:
-    store.save_release(db.writer(settings.database_path), release)
+    with db.write_lock:
+        store.save_release(db.writer(settings.database_path), release)
 
 
 def _mark_missing(name: str, version: str) -> None:
-    store.mark_missing(db.writer(settings.database_path), name, version)
+    with db.write_lock:
+        store.mark_missing(db.writer(settings.database_path), name, version)
 
 
 async def ingest_release(
