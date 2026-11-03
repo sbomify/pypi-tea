@@ -50,7 +50,7 @@ Components listed in these SBOMs, matched against the [OSV database](https://osv
 | Vulnerability | Severity | Component | Fixed in | Summary |
 |---|---|---|---|---|
 {% for v in vulnerabilities %}
-| [{{ v.id | md }}](https://osv.dev/vulnerability/{{ v.id | md_url }}) | {{ v.severity }}{% if v.score %} ({{ v.score }}){% endif %} | {{ v.package | md }} {{ v.version | md }} ({{ v.ecosystem | md }}) | {{ v.fixed | join(", ") | md if v.fixed else "none listed" }} | {{ v.summary | md(200) }} |
+| [{{ v.id | md }}]({{ v.url | md_url }}) | {{ v.severity }}{% if v.score %} ({{ v.score }}){% endif %} | {{ v.package | md }} {{ v.version | md }} ({{ v.ecosystem | md }}) | {{ v.fixed | join(", ") | md if v.fixed else "none listed" }} | {{ v.summary | md(200) }} |
 {% endfor %}
 {% else %}
 OSV has no known vulnerabilities for the components these SBOMs list.

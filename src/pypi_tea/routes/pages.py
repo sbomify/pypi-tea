@@ -93,6 +93,15 @@ def markdown_response(body: str, canonical_url: str, cache: str) -> Response:
 
 _SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
 
+INSIGHTS_URL = "https://insights.sbomify.com"
+
+
+def vulnerability_url(vuln_id: str) -> str:
+    """sbomify Insights has a page per CVE; anything without a CVE id goes to OSV."""
+    if vuln_id.startswith("CVE-"):
+        return f"{INSIGHTS_URL}/{quote(vuln_id)}/"
+    return f"https://osv.dev/vulnerability/{quote(vuln_id)}"
+
 
 def _vulnerability_context(release: ReleaseRecord, scans: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Known vulnerabilities across the release's SBOMs, one entry per (vulnerability, package version)."""
@@ -112,7 +121,7 @@ def _vulnerability_context(release: ReleaseRecord, scans: dict[str, dict[str, An
             scanners.add(scan["scanner"])
             for f in scan["findings"]:
                 key = (f["id"], f["ecosystem"], f["package"], f["version"])
-                entry = merged.setdefault(key, {**f, "wheels": []})
+                entry = merged.setdefault(key, {**f, "url": vulnerability_url(f["id"]), "wheels": []})
                 if w.filename not in entry["wheels"]:
                     entry["wheels"].append(w.filename)
     vulns = osv.sort_findings(list(merged.values()))

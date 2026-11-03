@@ -169,7 +169,7 @@ pypi-tea-osv --all           # rescan everything now
 
 `pypi-tea-osv` is a separate process from the worker, meant to run from a timer (`deploy/pypi-tea-osv.timer` runs it hourly). It needs [osv-scanner](https://github.com/google/osv-scanner/releases) v2 and outbound HTTPS to `api.osv.dev`. Each SBOM is scanned by content hash, so a document shipped in many wheels is scanned once, and a re-resolved release keeps its results. The SBOMs never change but the OSV database does, so each one is scanned again once a day.
 
-The package page, and its `.md` and `.json` copies, list each vulnerability once per affected component, with its CVSS severity, the fixed version and which wheels carry it. Until an SBOM has been scanned the page says nothing about vulnerabilities, rather than claiming there are none. An SBOM osv-scanner can't parse is recorded with the error and left out. If osv-scanner or the OSV API is unavailable, the run stops without recording anything and exits `2`, and the next run picks up where it stopped.
+The package page, and its `.md` and `.json` copies, list each vulnerability once per affected component, with its CVSS severity, the fixed version and which wheels carry it. CVEs link to their page on [sbomify Insights](https://insights.sbomify.com); the few findings without a CVE id link to osv.dev. Until an SBOM has been scanned the page says nothing about vulnerabilities, rather than claiming there are none. An SBOM osv-scanner can't parse is recorded with the error and left out. If osv-scanner or the OSV API is unavailable, the run stops without recording anything and exits `2`, and the next run picks up where it stopped.
 
 ### Migrating from 0.x (Redis)
 

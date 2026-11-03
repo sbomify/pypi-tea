@@ -16,6 +16,7 @@ from pypi_tea.app import app
 from pypi_tea.config import settings
 from pypi_tea.ingest import ingest_release
 from pypi_tea.models import ReleaseRecord, SbomRecord, WheelRecord
+from pypi_tea.routes import pages
 from pypi_tea.services import osv
 
 pytestmark = pytest.mark.anyio
@@ -180,6 +181,11 @@ def test_fixed_in_is_the_fix_for_the_installed_release_line() -> None:
     assert osv.findings_from_package(entry)[0]["fixed"] == ["0.2.0", "0.2.23"]
 
 
+def test_cves_link_to_insights_and_the_rest_to_osv() -> None:
+    assert pages.vulnerability_url("CVE-2018-18074") == "https://insights.sbomify.com/CVE-2018-18074/"
+    assert pages.vulnerability_url("RUSTSEC-2020-0071") == "https://osv.dev/vulnerability/RUSTSEC-2020-0071"
+
+
 def test_severity_labels_follow_cvss() -> None:
     assert [osv.severity_label(s) for s in (9.8, 7.0, 4.0, 0.1, 0.0, None)] == [
         "critical",
@@ -204,19 +210,20 @@ async def test_scan_stores_findings_and_pages_show_them(
 
     page = await client.get("/package/acme/1.0")
     assert "1 known vulnerability" in page.text
-    assert 'href="https://osv.dev/vulnerability/CVE-2018-18074"' in page.text
+    assert 'href="https://insights.sbomify.com/CVE-2018-18074/"' in page.text
     assert "Insufficiently Protected Credentials in Requests" in page.text
     assert "1 of 2 wheels" in page.text
     assert "no known vulnerabilities" in page.text  # the clean wheel's SBOM
 
     markdown = (await client.get("/package/acme/1.0.md")).text
     assert "## Known vulnerabilities" in markdown
-    assert "| [CVE-2018-18074](https://osv.dev/vulnerability/CVE-2018-18074) | high (7.5) |" in markdown
+    assert "| [CVE-2018-18074](https://insights.sbomify.com/CVE-2018-18074/) | high (7.5) |" in markdown
     assert "\n\n\n" not in markdown
 
     data = (await client.get("/package/acme/1.0.json")).json()
     (vuln,) = data["vulnerabilities"]
     assert vuln["id"] == "CVE-2018-18074" and vuln["fixed"] == ["2.20.0"]
+    assert vuln["url"] == "https://insights.sbomify.com/CVE-2018-18074/"
     assert vuln["wheels"] == ["acme-1.0-py3-none-0.whl"]
     assert data["vulnerability_scan"]["scanned_sboms"] == 2
     assert data["vulnerability_scan"]["severity_counts"] == {"high": 1}

@@ -202,7 +202,7 @@
               {% for v in vulnerabilities %}
               <tr>
                 <td>
-                  <a href="https://osv.dev/vulnerability/{{ v.id | urlencode }}" class="link mono" rel="noopener nofollow" data-ph-event="external_link_clicked" data-ph-link-type="osv">{{ v.id }}</a>
+                  {% if v.url.startswith("https://insights.sbomify.com/") %}<a href="{{ v.url }}" class="link mono" rel="noopener" data-ph-event="external_link_clicked" data-ph-link-type="insights">{{ v.id }}</a>{% else %}<a href="{{ v.url }}" class="link mono" rel="noopener nofollow" data-ph-event="external_link_clicked" data-ph-link-type="osv">{{ v.id }}</a>{% endif %}
                   {% if v.summary %}<div class="vuln-summary">{{ v.summary }}</div>{% endif %}
                 </td>
                 <td><span class="tag {% if v.severity in ('critical', 'high') %}tag-danger{% elif v.severity == 'medium' %}tag-warning{% endif %}">{{ v.severity|capitalize }}{% if v.score %} {{ v.score }}{% endif %}</span></td>
