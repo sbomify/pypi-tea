@@ -1,0 +1,10 @@
+[Unit]
+Description=Scan new and day-old SBOMs for known vulnerabilities
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=1h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -36,11 +36,27 @@ PEP 740 attestation failed verification{% if wheel.attestation.error %}: {{ whee
 
 {% endif %}
 {% for sbom in wheel.sboms %}
-- [{{ sbom.path | md }}]({{ sbom.download_url_abs }}): {{ sbom.format or "unknown format" }}, `{{ sbom.media_type }}`, {% if sbom.valid is none %}not validated{% elif sbom.valid %}valid{% else %}fails schema validation{% endif %}
+- [{{ sbom.path | md }}]({{ sbom.download_url_abs }}): {{ sbom.format or "unknown format" }}, `{{ sbom.media_type }}`, {% if sbom.valid is none %}not validated{% elif sbom.valid %}valid{% else %}fails schema validation{% endif %}{% if sbom.vulnerability_count is not none %}, {% if sbom.vulnerability_count %}{{ sbom.vulnerability_count }} known vulnerabilit{{ "y" if sbom.vulnerability_count == 1 else "ies" }}{% else %}no known vulnerabilities{% endif %}{% endif %}
 
 {% endfor %}
 
 {% endfor %}
+{% if vulnerability_scan.scanned_sboms %}
+## Known vulnerabilities
+
+Components listed in these SBOMs, matched against the [OSV database](https://osv.dev/){% if vulnerability_scan.scanned_at %} as of {{ vulnerability_scan.scanned_at }}{% endif %}{% if vulnerability_scan.scanned_sboms < vulnerability_scan.total_sboms %} ({{ vulnerability_scan.scanned_sboms }} of {{ vulnerability_scan.total_sboms }} SBOMs scanned so far){% endif %}.
+
+{% if vulnerabilities %}
+| Vulnerability | Severity | Component | Fixed in | Summary |
+|---|---|---|---|---|
+{% for v in vulnerabilities %}
+| [{{ v.id | md }}](https://osv.dev/vulnerability/{{ v.id | md_url }}) | {{ v.severity }}{% if v.score %} ({{ v.score }}){% endif %} | {{ v.package | md }} {{ v.version | md }} ({{ v.ecosystem | md }}) | {{ v.fixed | join(", ") | md if v.fixed else "none listed" }} | {{ v.summary | md(200) }} |
+{% endfor %}
+{% else %}
+OSV has no known vulnerabilities for the components these SBOMs list.
+{% endif %}
+
+{% endif %}
 ## Fetch it over TEA
 
 This SBOM is served over the [Transparency Exchange API](https://github.com/CycloneDX/transparency-exchange-api) (TEA). With the `libtea` client:

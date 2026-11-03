@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS releases (
@@ -55,6 +55,22 @@ CREATE INDEX IF NOT EXISTS sboms_wheel ON sboms (wheel_url);
 -- Covers the listing rebuild's GROUP BY, which would otherwise read every row's content.
 CREATE INDEX IF NOT EXISTS sboms_release_format ON sboms (name, version, format);
 CREATE INDEX IF NOT EXISTS sboms_family ON sboms (family, name, version);
+-- Finds the SBOMs pypi-tea-osv hasn't scanned without reading their content.
+CREATE INDEX IF NOT EXISTS sboms_sha256 ON sboms (sha256);
+
+-- Latest osv-scanner result per SBOM, keyed by content hash: a re-resolved release
+-- replaces its sboms rows but keeps its scans, and identical SBOMs are scanned once.
+-- findings is zlib-compressed JSON, worst first; vulns and max_severity summarise it.
+CREATE TABLE IF NOT EXISTS osv_scans (
+    sha256 TEXT PRIMARY KEY,
+    scanned_at INTEGER NOT NULL,
+    scanner TEXT NOT NULL,
+    error TEXT,
+    vulns INTEGER NOT NULL,
+    max_severity TEXT,
+    findings BLOB NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS osv_scans_age ON osv_scans (scanned_at);
 
 -- Deterministic UUID -> (kind, release, wheel) for every TEA entity.
 CREATE TABLE IF NOT EXISTS entities (
@@ -199,6 +215,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("DROP INDEX IF EXISTS sboms_release")  # a prefix of sboms_release_format
             store.recount(conn)
             store.rebuild_catalog_listing(conn)
+        # 3: osv_scans and the sboms_sha256 index, both created by _SCHEMA; nothing to backfill.
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.execute("COMMIT")
     except BaseException:

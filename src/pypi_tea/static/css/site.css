@@ -802,6 +802,20 @@ tbody tr:hover {
   padding: 8px 12px;
 }
 
+.vulns td {
+  vertical-align: top;
+}
+
+.vuln-component {
+  white-space: nowrap;
+}
+
+.vuln-summary {
+  margin-top: 2px;
+  font-size: 0.825rem;
+  color: var(--ink-muted);
+}
+
 td.num,
 th.num {
   text-align: right;
@@ -851,6 +865,10 @@ th.num {
   line-height: 1.4;
   color: var(--ink);
   white-space: nowrap;
+}
+
+a.tag {
+  text-decoration: none;
 }
 
 .tag svg {

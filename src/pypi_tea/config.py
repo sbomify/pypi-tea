@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Run the ingest worker inside the API process (development and tests only).
     embedded_worker: bool = False
 
+    # Vulnerability scanning (pypi-tea-osv): the osv-scanner binary, how many SBOMs
+    # go into one osv-scanner run, how long a run may take, and how old a scan may
+    # get before the SBOM is scanned again. The OSV database changes daily; the
+    # SBOMs never do.
+    osv_scanner_path: str = "osv-scanner"
+    osv_batch_size: int = 50
+    osv_timeout_seconds: float = 600.0
+    osv_rescan_hours: float = 24.0
+
     # Product analytics (see analytics.py). The project key is public by design:
     # the browser snippet ships it to every visitor. Set it empty to turn analytics off.
     posthog_api_key: str = "phc_pbDJTxYmvCVsafKTuQNkYCLWYf5eTXKax6tLMPMHxXeu"

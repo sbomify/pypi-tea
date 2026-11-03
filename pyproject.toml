@@ -39,6 +39,7 @@ import-redis = ["redis>=5.0"]
 pypi-tea-serve = "pypi_tea.serve:cli"
 pypi-tea-refresh = "pypi_tea.refresh:cli"
 pypi-tea-worker = "pypi_tea.worker:cli"
+pypi-tea-osv = "pypi_tea.scan:cli"
 
 [build-system]
 requires = ["hatchling>=1.28.0"]

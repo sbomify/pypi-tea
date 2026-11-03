@@ -28,8 +28,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Installing systemd services"
 cp "${SCRIPT_DIR}/pypi-tea.service" /etc/systemd/system/
 cp "${SCRIPT_DIR}/pypi-tea-worker.service" /etc/systemd/system/
+cp "${SCRIPT_DIR}/pypi-tea-osv.service" "${SCRIPT_DIR}/pypi-tea-osv.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable pypi-tea pypi-tea-worker
+if [ -x /usr/local/bin/osv-scanner ]; then
+    systemctl enable --now pypi-tea-osv.timer
+else
+    echo "==> Skipping the vulnerability scan timer: install osv-scanner to /usr/local/bin first"
+    echo "    (https://github.com/google/osv-scanner/releases), then: systemctl enable --now pypi-tea-osv.timer"
+fi
 
 echo "==> Done. Set PYPI_TEA_SERVER_ROOT_URL in /etc/default/pypi-tea, then:"
 echo "    systemctl restart pypi-tea pypi-tea-worker"
