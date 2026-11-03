@@ -19,6 +19,7 @@ Python wheels can include SBOMs in `.dist-info/sboms/` ([PEP 770](https://peps.p
    - reads each wheel's ZIP central directory and `.dist-info/sboms/` members with HTTP range requests (a few KB per wheel, not the whole file)
    - detects and validates each SBOM's format, and checks PEP 740 attestations
 4. The result is stored permanently: wheels are immutable, so a wheel is never fetched twice.
+5. Separately, `pypi-tea-osv` scans every stored SBOM for known vulnerabilities with [osv-scanner](https://github.com/google/osv-scanner) and the package page lists what it found.
 
 ## Architecture
 
@@ -29,6 +30,8 @@ graph LR
     API <-->|reads, enqueue| DB[("SQLite (WAL)")]
     Worker["pypi-tea-worker"] <-->|jobs, results| DB
     Worker -->|JSON API, range requests| PyPI
+    Scan["pypi-tea-osv<br/>(timer)"] <-->|SBOMs, scan results| DB
+    Scan -->|osv-scanner| OSV["OSV (api.osv.dev)"]
 ```
 
 The service is split so that traffic can never turn into upstream work it can't afford:
@@ -48,6 +51,7 @@ A single SQLite database in WAL mode, so any number of API processes read while 
 | `releases` | One row per resolved `package@version`: upload date, trimmed PyPI metadata, whether any wheel has an SBOM |
 | `wheels` | Every wheel of a release: digests, size, attestation result, and an error if it couldn't be read |
 | `sboms` | Every SBOM found: format, validity, media type, SHA-256, and the content (zlib-compressed) |
+| `osv_scans` | Latest osv-scanner result per SBOM, keyed by its SHA-256: when, which scanner version, an error if osv-scanner couldn't read it, and the findings (zlib-compressed JSON) |
 | `entities` | Deterministic TEA UUID → product / release / component / artifact |
 | `listing` | Materialised browse order, so any page is a primary-key range read. `/packages` and the sitemap are rebuilt by the worker when the set of SBOMs changes; `/products` and `/productReleases` are appended to as releases are discovered |
 | `counters`, `daily_counters` | Running totals behind `/stats`, updated in the same transaction as each release |
@@ -114,6 +118,10 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 | `PYPI_TEA_WORKER_CONCURRENCY` | `16` | Releases the worker resolves at once |
 | `PYPI_TEA_WHEEL_CONCURRENCY` | `4` | Wheels inspected at once within one release |
 | `PYPI_TEA_EMBEDDED_WORKER` | `false` | Run the worker inside the API process (development/tests only) |
+| `PYPI_TEA_OSV_SCANNER_PATH` | `osv-scanner` | osv-scanner binary used by `pypi-tea-osv` |
+| `PYPI_TEA_OSV_BATCH_SIZE` | `50` | SBOMs per osv-scanner run |
+| `PYPI_TEA_OSV_TIMEOUT_SECONDS` | `600` | Longest one osv-scanner run may take |
+| `PYPI_TEA_OSV_RESCAN_HOURS` | `24` | Rescan an SBOM once its last scan is this old |
 | `PYPI_TEA_POSTHOG_API_KEY` | sbomify's project key | PostHog project key for analytics; set it empty to turn analytics off |
 | `PYPI_TEA_POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingestion host |
 
@@ -150,6 +158,18 @@ pypi-tea-refresh --status            # queue depth per priority
 pypi-tea-refresh                     # check every known project for a new release now
 pypi-tea-refresh --existing          # ...and re-resolve every known release
 ```
+
+### Vulnerability scanning
+
+```bash
+pypi-tea-osv                 # scan SBOMs never scanned, or last scanned over PYPI_TEA_OSV_RESCAN_HOURS ago
+pypi-tea-osv --limit 100     # at most 100 SBOMs this run
+pypi-tea-osv --all           # rescan everything now
+```
+
+`pypi-tea-osv` is a separate process from the worker, meant to run from a timer (`deploy/pypi-tea-osv.timer` runs it hourly). It needs [osv-scanner](https://github.com/google/osv-scanner/releases) v2 and outbound HTTPS to `api.osv.dev`. Each SBOM is scanned by content hash, so a document shipped in many wheels is scanned once, and a re-resolved release keeps its results. The SBOMs never change but the OSV database does, so each one is scanned again once a day.
+
+The package page, and its `.md` and `.json` copies, list each vulnerability once per affected component, with its CVSS severity, the fixed version and which wheels carry it. CVEs link to their page on [sbomify Insights](https://insights.sbomify.com); the few findings without a CVE id link to osv.dev. Until an SBOM has been scanned the page says nothing about vulnerabilities, rather than claiming there are none. An SBOM osv-scanner can't parse is recorded with the error and left out. If osv-scanner or the OSV API is unavailable, the run stops without recording anything and exits `2`, and the next run picks up where it stopped.
 
 ### Migrating from 0.x (Redis)
 
@@ -225,10 +245,12 @@ All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable a
 A systemd setup is included in `deploy/`:
 
 ```bash
-sudo ./deploy/setup.sh 26.11.0    # installs into /opt/pypi-tea, enables both services
+sudo ./deploy/setup.sh 26.11.1    # installs into /opt/pypi-tea, enables both services
 sudoedit /etc/default/pypi-tea   # PYPI_TEA_SERVER_ROOT_URL=https://tea.example.com
 sudo systemctl restart pypi-tea pypi-tea-worker
 ```
+
+`setup.sh` also installs `pypi-tea-osv.timer` and enables it if `/usr/local/bin/osv-scanner` exists.
 
 The services run from a fixed virtualenv, so restarts don't depend on PyPI being reachable. The database lives in `/var/lib/pypi-tea/`.
 

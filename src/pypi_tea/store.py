@@ -584,3 +584,76 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+
+# --- vulnerability scans ---
+
+
+def osv_scans(conn: sqlite3.Connection, sha256s: list[str]) -> dict[str, dict[str, Any]]:
+    """sha256 -> latest scan, for the SBOMs on one page. One primary-key lookup each."""
+    out: dict[str, dict[str, Any]] = {}
+    for sha in dict.fromkeys(sha256s):
+        row = conn.execute(
+            "SELECT scanned_at, scanner, error, findings FROM osv_scans WHERE sha256 = ?", (sha,)
+        ).fetchone()
+        if row is not None:
+            out[sha] = {
+                "scanned_at": int(row["scanned_at"]),
+                "scanner": row["scanner"],
+                "error": row["error"],
+                "findings": json.loads(zlib.decompress(row["findings"])),
+            }
+    return out
+
+
+def sboms_due_for_scan(conn: sqlite3.Connection, scanned_before: int, limit: int) -> list[str]:
+    """Distinct SBOM hashes never scanned or last scanned before `scanned_before`, never-scanned first.
+
+    O(n) in SBOMs over two indexes; run by pypi-tea-osv, never per request.
+    """
+    return [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT s.sha256 FROM (SELECT DISTINCT sha256 FROM sboms) s
+            LEFT JOIN osv_scans o ON o.sha256 = s.sha256
+            WHERE o.sha256 IS NULL OR o.scanned_at < ?
+            ORDER BY coalesce(o.scanned_at, 0), s.sha256
+            LIMIT ?
+            """,
+            (scanned_before, limit),
+        )
+    ]
+
+
+def sbom_for_scan(conn: sqlite3.Connection, sha256: str) -> tuple[bytes, str] | None:
+    """Content and media type of one stored SBOM with this hash."""
+    row = conn.execute("SELECT content, media_type FROM sboms WHERE sha256 = ? LIMIT 1", (sha256,)).fetchone()
+    if row is None:
+        return None
+    return zlib.decompress(row["content"]), row["media_type"]
+
+
+def save_osv_scans(
+    conn: sqlite3.Connection, scanner: str, results: list[tuple[str, str | None, list[dict[str, Any]]]]
+) -> None:
+    """Store (sha256, error, findings) for a batch of scans in one transaction."""
+    now = int(time.time())
+    rows = []
+    for sha, error, findings in results:
+        worst = findings[0]["severity"] if findings else None
+        payload = zlib.compress(json.dumps(findings, separators=(",", ":")).encode(), 6)
+        rows.append((sha, now, scanner, error, len(findings), worst, payload))
+    begin(conn)
+    try:
+        conn.executemany("INSERT OR REPLACE INTO osv_scans VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def prune_osv_scans(conn: sqlite3.Connection) -> int:
+    """Drop scans of SBOMs no longer stored (a re-resolve changed a wheel's SBOM)."""
+    cur = conn.execute("DELETE FROM osv_scans WHERE sha256 NOT IN (SELECT sha256 FROM sboms)")
+    return cur.rowcount

@@ -1,0 +1,24 @@
+[Unit]
+Description=pypi-tea vulnerability scan (osv-scanner over stored SBOMs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pypi-tea
+Group=pypi-tea
+EnvironmentFile=-/etc/default/pypi-tea
+Environment=PYPI_TEA_DATABASE_PATH=/var/lib/pypi-tea/pypi-tea.db
+Environment=PYPI_TEA_OSV_SCANNER_PATH=/usr/local/bin/osv-scanner
+StateDirectory=pypi-tea
+
+ExecStart=/opt/pypi-tea/bin/pypi-tea-osv
+
+Nice=10
+MemoryHigh=800M
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

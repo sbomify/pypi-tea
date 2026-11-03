@@ -82,6 +82,13 @@
           PEP 740 attested
         </span>
         {% endif %}
+        {% if vulnerability_scan.scanned_sboms %}
+        {% if vulnerabilities %}
+        <a href="#vulnerabilities-heading" class="tag {{ 'tag-danger' if vulnerability_scan.severity_counts.critical or vulnerability_scan.severity_counts.high else 'tag-warning' }}">{{ vulnerabilities|length }} known vulnerabilit{{ "y" if vulnerabilities|length == 1 else "ies" }}</a>
+        {% else %}
+        <span class="tag tag-success">No known vulnerabilities</span>
+        {% endif %}
+        {% endif %}
       </div>
       {% include "_page_tools.html" %}
     </header>
@@ -159,6 +166,7 @@
               <div class="kind">
                 {% if sbom.format %}<span>{{ sbom.format }}</span>{% endif %}
                 <span>{{ sbom.media_type }}</span>
+                {% if sbom.vulnerability_count is not none %}<span>{% if sbom.vulnerability_count %}{{ sbom.vulnerability_count }} known vulnerabilit{{ "y" if sbom.vulnerability_count == 1 else "ies" }}{% else %}no known vulnerabilities{% endif %}</span>{% endif %}
               </div>
             </div>
           </div>
@@ -171,6 +179,46 @@
       </div>
       {% endfor %}
     </section>
+
+    {% if vulnerability_scan.scanned_sboms %}
+    <section class="section" aria-labelledby="vulnerabilities-heading">
+      <div class="section-head">
+        <h2 id="vulnerabilities-heading">Known vulnerabilities</h2>
+        <p>Components listed in these SBOMs, matched against the <a href="https://osv.dev/" class="link" rel="noopener">OSV database</a>{% if vulnerability_scan.scanned_at %} as of {{ vulnerability_scan.scanned_at }}{% endif %}{% if vulnerability_scan.scanned_sboms < vulnerability_scan.total_sboms %} ({{ vulnerability_scan.scanned_sboms }} of {{ vulnerability_scan.total_sboms }} SBOMs scanned so far){% endif %}.</p>
+      </div>
+      {% if vulnerabilities %}
+      <div class="card">
+        <div class="table-wrap">
+          <table class="table-compact vulns">
+            <thead>
+              <tr>
+                <th scope="col">Vulnerability</th>
+                <th scope="col">Severity</th>
+                <th scope="col">Component</th>
+                <th scope="col">Fixed in</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for v in vulnerabilities %}
+              <tr>
+                <td>
+                  {% if v.url.startswith("https://insights.sbomify.com/") %}<a href="{{ v.url }}" class="link mono" rel="noopener" data-ph-event="external_link_clicked" data-ph-link-type="insights">{{ v.id }}</a>{% else %}<a href="{{ v.url }}" class="link mono" rel="noopener nofollow" data-ph-event="external_link_clicked" data-ph-link-type="osv">{{ v.id }}</a>{% endif %}
+                  {% if v.summary %}<div class="vuln-summary">{{ v.summary }}</div>{% endif %}
+                </td>
+                <td><span class="tag {% if v.severity in ('critical', 'high') %}tag-danger{% elif v.severity == 'medium' %}tag-warning{% endif %}">{{ v.severity|capitalize }}{% if v.score %} {{ v.score }}{% endif %}</span></td>
+                <td><span class="mono vuln-component">{{ v.package }} {{ v.version }}</span><div class="vuln-summary">{{ v.ecosystem }}{% if v.wheels|length < wheels|length %} · {{ v.wheels|length }} of {{ wheels|length }} wheels{% endif %}</div></td>
+                <td class="mono">{{ v.fixed|join(', ') if v.fixed else '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="card card-body"><p class="prose-sm">OSV has no known vulnerabilities for the components these SBOMs list.</p></div>
+      {% endif %}
+    </section>
+    {% endif %}
 
     <section class="section card card-body" aria-labelledby="tea-heading">
       <h2 id="tea-heading">Access via TEA</h2>

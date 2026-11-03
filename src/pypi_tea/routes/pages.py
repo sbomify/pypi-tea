@@ -7,6 +7,7 @@ page says, so they carry `noindex` and point at the HTML page as canonical.
 
 import math
 import re
+from datetime import UTC, datetime
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from pypi_tea import jobs, store
 from pypi_tea.config import settings
 from pypi_tea.lookup import memoized, read
 from pypi_tea.models import ReleaseRecord
+from pypi_tea.services import osv
 
 router = APIRouter()
 
@@ -89,8 +91,56 @@ def markdown_response(body: str, canonical_url: str, cache: str) -> Response:
     return Response(body, media_type="text/markdown; charset=utf-8", headers=twin_headers(canonical_url, cache))
 
 
-def page_context(release: ReleaseRecord) -> dict[str, Any]:
+_SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
+
+INSIGHTS_URL = "https://insights.sbomify.com"
+
+
+def vulnerability_url(vuln_id: str) -> str:
+    """sbomify Insights has a page per CVE; anything without a CVE id goes to OSV."""
+    if vuln_id.startswith("CVE-"):
+        return f"{INSIGHTS_URL}/{quote(vuln_id)}/"
+    return f"https://osv.dev/vulnerability/{quote(vuln_id)}"
+
+
+def _vulnerability_context(release: ReleaseRecord, scans: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Known vulnerabilities across the release's SBOMs, one entry per (vulnerability, package version)."""
+    merged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    scanned = 0
+    scanned_at: list[int] = []
+    scanners: set[str] = set()
+    total = 0
+    for w in release.wheels:
+        for s in w.sboms:
+            total += 1
+            scan = scans.get(s.sha256)
+            if scan is None:
+                continue
+            scanned += 1
+            scanned_at.append(scan["scanned_at"])
+            scanners.add(scan["scanner"])
+            for f in scan["findings"]:
+                key = (f["id"], f["ecosystem"], f["package"], f["version"])
+                entry = merged.setdefault(key, {**f, "url": vulnerability_url(f["id"]), "wheels": []})
+                if w.filename not in entry["wheels"]:
+                    entry["wheels"].append(w.filename)
+    vulns = osv.sort_findings(list(merged.values()))
+    counts = {sev: sum(1 for v in vulns if v["severity"] == sev) for sev in _SEVERITIES}
+    return {
+        "vulnerabilities": vulns,
+        "vulnerability_scan": {
+            "scanned_sboms": scanned,
+            "total_sboms": total,
+            "scanned_at": datetime.fromtimestamp(min(scanned_at), UTC).date().isoformat() if scanned_at else None,
+            "scanner": ", ".join(sorted(scanners)) or None,
+            "severity_counts": {k: n for k, n in counts.items() if n},
+        },
+    }
+
+
+def page_context(release: ReleaseRecord, scans: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     info = release.info
+    scans = scans or {}
     wheels: list[dict[str, Any]] = []
     formats: set[str] = set()
     for w in release.wheels:
@@ -99,6 +149,7 @@ def page_context(release: ReleaseRecord) -> dict[str, Any]:
         sboms = []
         for s in w.sboms:
             formats.add(s.family)
+            scan = scans.get(s.sha256)
             sboms.append(
                 {
                     "artifact_uuid": s.uuid,
@@ -109,6 +160,9 @@ def page_context(release: ReleaseRecord) -> dict[str, Any]:
                     "media_type": s.media_type,
                     "download_url": f"/artifact/{s.uuid}/download",
                     "download_url_abs": f"{settings.server_root_url}/artifact/{s.uuid}/download",
+                    # None: not scanned yet. Otherwise the number of known vulnerabilities found.
+                    "vulnerability_count": None if scan is None or scan["error"] else len(scan["findings"]),
+                    "scan_error": scan["error"] if scan else None,
                 }
             )
         wheels.append({"filename": w.filename, "url": w.url, "sboms": sboms, "attestation": w.attestation})
@@ -127,7 +181,13 @@ def page_context(release: ReleaseRecord) -> dict[str, Any]:
         "formats": sorted(formats),
         "sbom_count": sum(len(w["sboms"]) for w in wheels),
         "has_attestation": any((w.attestation or {}).get("status") == "verified" for w in release.wheels),
+        **_vulnerability_context(release, scans),
     }
+
+
+async def _package_context(release: ReleaseRecord) -> dict[str, Any]:
+    scans = await read(store.osv_scans, [s.sha256 for w in release.wheels for s in w.sboms])
+    return page_context(release, scans)
 
 
 async def _load_package(name: str, pkg_version: str, suffix: str, html: bool) -> ReleaseRecord | Response:
@@ -165,7 +225,7 @@ async def package_markdown(name: str, pkg_version: str) -> Response:
     if isinstance(release, Response):
         return release
     canonical_url = _package_url(name, pkg_version)
-    body = render("package.md", **page_context(release), canonical_url=canonical_url)
+    body = render("package.md", **(await _package_context(release)), canonical_url=canonical_url)
     return markdown_response(body, canonical_url, PAGE_CACHE)
 
 
@@ -175,7 +235,7 @@ async def package_json(name: str, pkg_version: str) -> Response:
     if isinstance(release, Response):
         return release
     canonical_url = _package_url(name, pkg_version)
-    ctx = page_context(release)
+    ctx = await _package_context(release)
     for wheel in ctx["wheels"]:
         for sbom in wheel["sboms"]:
             sbom["download_url"] = sbom.pop("download_url_abs")
@@ -189,7 +249,7 @@ async def package_page(name: str, pkg_version: str) -> Response:
     if isinstance(release, Response):
         return release
     canonical_url = _package_url(name, pkg_version)
-    ctx = page_context(release)
+    ctx = await _package_context(release)
     analytics_page = {
         "page_type": "package",
         "package": name,
