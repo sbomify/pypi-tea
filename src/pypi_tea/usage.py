@@ -53,38 +53,39 @@ class UsageBuffer:
         if not (counts or daily or recent):
             return
         conn = db.writer(settings.database_path)
-        try:
-            db.begin(conn)
-            conn.executemany(
-                """
-                INSERT INTO usage_counts (kind, key, count) VALUES (?, ?, ?)
-                ON CONFLICT (kind, key) DO UPDATE SET count = count + excluded.count
-                """,
-                [(k, key, n) for (k, key), n in counts.items()],
-            )
-            conn.executemany(
-                """
-                INSERT INTO usage_daily (day, queries) VALUES (?, ?)
-                ON CONFLICT (day) DO UPDATE SET queries = queries + excluded.queries
-                """,
-                list(daily.items()),
-            )
-            conn.executemany("INSERT INTO usage_recent (entry) VALUES (?)", [(json.dumps(e),) for e in recent])
-            conn.execute(
-                "DELETE FROM usage_recent WHERE id <= (SELECT coalesce(max(id), 0) FROM usage_recent) - ?",
-                (RECENT_MAX,),
-            )
-            conn.execute("COMMIT")
-        except BaseException:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            # Put the counts back so the next flush retries them instead of losing them.
-            with self._lock:
-                self._counts.update(counts)
-                self._daily.update(daily)
-                self._recent[:0] = recent
-                del self._recent[:-RECENT_MAX]
-            raise
+        with db.write_lock:
+            try:
+                db.begin(conn)
+                conn.executemany(
+                    """
+                    INSERT INTO usage_counts (kind, key, count) VALUES (?, ?, ?)
+                    ON CONFLICT (kind, key) DO UPDATE SET count = count + excluded.count
+                    """,
+                    [(k, key, n) for (k, key), n in counts.items()],
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO usage_daily (day, queries) VALUES (?, ?)
+                    ON CONFLICT (day) DO UPDATE SET queries = queries + excluded.queries
+                    """,
+                    list(daily.items()),
+                )
+                conn.executemany("INSERT INTO usage_recent (entry) VALUES (?)", [(json.dumps(e),) for e in recent])
+                conn.execute(
+                    "DELETE FROM usage_recent WHERE id <= (SELECT coalesce(max(id), 0) FROM usage_recent) - ?",
+                    (RECENT_MAX,),
+                )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                # Put the counts back so the next flush retries them instead of losing them.
+                with self._lock:
+                    self._counts.update(counts)
+                    self._daily.update(daily)
+                    self._recent[:0] = recent
+                    del self._recent[:-RECENT_MAX]
+                raise
 
 
 usage = UsageBuffer()

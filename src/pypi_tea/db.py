@@ -147,6 +147,14 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _local = threading.local()
 
+# Held for every write transaction this process makes, so its own writers queue
+# here instead of in SQLite's busy handler. That handler polls with growing sleeps
+# and favours whichever connection retries at the right moment: with the worker's
+# job loops all writing at once, an unlucky one can lose every race for the whole
+# busy_timeout and fail with "database is locked" though no transaction held the
+# lock nearly that long. busy_timeout still covers waiting on other processes.
+write_lock = threading.Lock()
+
 
 def _configure(conn: sqlite3.Connection, *, readonly: bool) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
@@ -230,6 +238,14 @@ def writer(path: str) -> sqlite3.Connection:
         conn = connect(path)
         conns[path] = conn
     return conn
+
+
+def is_busy(e: BaseException) -> bool:
+    """Whether `e` is SQLite giving up on a lock another connection holds, rather than a real error."""
+    return isinstance(e, sqlite3.OperationalError) and (getattr(e, "sqlite_errorcode", 0) & 0xFF) in (
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    )
 
 
 def begin(conn: sqlite3.Connection) -> None:

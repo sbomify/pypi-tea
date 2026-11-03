@@ -47,7 +47,7 @@ Request flow for a TEI/PURL: route handler → `lookup.ensure_release()` → sto
 - **`app.py`** — FastAPI app, lifespan (schema init, usage flusher, optional embedded worker), pure-ASGI `EdgeMiddleware` (request deadline, cache headers, endpoint counters), `/healthz`
 - **`serve.py`** — `pypi-tea-serve`: gunicorn with `reuse_port` and a uvicorn worker class that sets `limit_concurrency`
 - **`config.py`** — pydantic-settings with `PYPI_TEA_` env prefix
-- **`db.py`** — schema and connections. WAL mode; one read-only connection per thread (`db.reader`) and one read-write (`db.writer`)
+- **`db.py`** — schema and connections. WAL mode; one read-only connection per thread (`db.reader`) and one read-write (`db.writer`). Hold `db.write_lock` around every write transaction so a process's writers queue on it rather than racing in SQLite's busy handler
 - **`store.py`** — all SQL: reads for the API, `save_release` for the worker (which also keeps `counters` and the `*products` / `*releases` listings current), `rebuild_listing` for the SBOM listings
 - **`jobs.py`** — queue on the `jobs` table: idempotent enqueue keyed by (name, version), leased claims, backoff
 - **`lookup.py`** — read-path helpers: `read()` runs a store query off the event loop; `ensure_release()` does bounded on-demand resolution; `memoized()` is a bounded, single-flight, per-process TTL cache for aggregates
