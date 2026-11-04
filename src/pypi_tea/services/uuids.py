@@ -19,5 +19,9 @@ def component_release_uuid(url: str) -> str:
     return str(uuid.uuid5(PYPOT_NAMESPACE, url))
 
 
+def distribution_uuid(wheel_url: str) -> str:
+    return str(uuid.uuid5(PYPOT_NAMESPACE, f"distribution:{wheel_url}"))
+
+
 def artifact_uuid(wheel_url: str, sbom_path: str) -> str:
     return str(uuid.uuid5(PYPOT_NAMESPACE, f"sbom:{wheel_url}:{sbom_path}"))

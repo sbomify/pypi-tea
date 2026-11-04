@@ -23,6 +23,7 @@ from pypi_tea.config import settings
 from pypi_tea.lookup import memoized, read
 from pypi_tea.models import ReleaseRecord
 from pypi_tea.services import osv
+from pypi_tea.tea import TEA_VERSION
 
 router = APIRouter()
 
@@ -333,5 +334,5 @@ async def dashboard_markdown() -> Response:
 @router.get("/llms.txt", response_class=PlainTextResponse)
 async def llms_txt() -> PlainTextResponse:
     return PlainTextResponse(
-        render("llms.txt", tea_spec_version=settings.tea_spec_version), headers={"Cache-Control": DASHBOARD_CACHE}
+        render("llms.txt", tea_spec_version=TEA_VERSION), headers={"Cache-Control": DASHBOARD_CACHE}
     )
