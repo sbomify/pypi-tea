@@ -198,11 +198,60 @@ async def test_non_canonical_package_url_redirects(client: httpx.AsyncClient) ->
 
 async def test_products_list_comes_from_listing(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
     await _seed(fake_pypi, ("a", "1", True), ("b", "1", False), ("b", "2", False))
-    products = (await client.get("/products", params={"pageOffset": 1, "pageSize": 1})).json()
+    products = (await client.get("/v0.4.0/products", params={"pageOffset": 1, "pageSize": 1})).json()
     assert products["totalResults"] == 2
     assert [p["name"] for p in products["results"]] == ["b"]
-    releases = (await client.get("/productReleases", params={"pageOffset": 0, "pageSize": 10})).json()
+    releases = (await client.get("/v0.4.0/productReleases", params={"pageOffset": 0, "pageSize": 10})).json()
     assert releases["totalResults"] == 3
+
+
+async def test_products_page_tokens(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", False), ("b", "2", False))
+    first = (await client.get("/v1.0.0/products", params={"pageSize": 1})).json()
+    assert first == {"hasNext": True, "nextPageToken": "1", "results": [first["results"][0]]}
+    last = (await client.get("/v1.0.0/products", params={"pageSize": 1, "pageToken": "1"})).json()
+    assert last["hasNext"] is False
+    assert "nextPageToken" not in last
+    assert [p["name"] for p in first["results"] + last["results"]] == ["a", "b"]
+    releases = (await client.get("/productReleases", params={"pageSize": 2})).json()
+    assert releases["hasNext"] is True
+    assert len(releases["results"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("params", "error"),
+    [
+        ({"pageToken": "nope"}, "INVALID_PAGE_TOKEN"),
+        ({"pageSize": 101}, "INVALID_REQUEST"),
+    ],
+)
+async def test_bad_paging_is_a_tea_400(client: httpx.AsyncClient, params: dict[str, str | int], error: str) -> None:
+    resp = await client.get("/v1.0.0/products", params=params)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == error
+
+
+async def test_discovery_needs_exactly_one_identifier(client: httpx.AsyncClient) -> None:
+    for params in ({}, {"tei": "urn:tei:purl:x:pkg:pypi/a@1", "purl": "pkg:pypi/a@1"}):
+        resp = await client.get("/v1.0.0/discovery", params=params)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "INVALID_REQUEST"
+
+
+async def test_artifact_download_by_media_type(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True))
+    [found] = (await client.get("/v1.0.0/discovery", params={"purl": "pkg:pypi/a@1"})).json()
+    collection = (await client.get(f"/v1.0.0/productRelease/{found['productReleaseUuid']}/collection/latest")).json()
+    artifact = collection["artifacts"][0]
+    media_type = artifact["formats"][0]["mediaType"]
+    url = f"/v1.0.0/artifact/{artifact['uuid']}/latest/download"
+    assert (await client.get(url, params={"mediaType": media_type.upper()})).status_code == 200
+    refused = await client.get(url, params={"mediaType": "application/pdf"})
+    assert refused.status_code == 406
+    assert refused.json()["error"] == "NO_ACCEPTABLE_FORMAT"
+    assert (await client.get(f"/v1.0.0/artifact/{artifact['uuid']}/2/download")).status_code == 404
+    # The package page's link, at the root.
+    assert (await client.get(f"/artifact/{artifact['uuid']}/download")).status_code == 200
 
 
 async def test_out_of_range_sitemap_shard_is_not_memoized(client: httpx.AsyncClient) -> None:

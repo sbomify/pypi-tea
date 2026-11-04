@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -16,6 +18,8 @@ from pypi_tea import analytics, db, sentry
 from pypi_tea.config import settings
 from pypi_tea.lookup import Overloaded, Pending, read
 from pypi_tea.routes import pages, seo, stats, tea
+from pypi_tea.routes.tea import InvalidRequest
+from pypi_tea.tea import LEGACY_TEA_VERSION, TEA_VERSION
 from pypi_tea.usage import FLUSH_SECONDS, usage
 
 sentry.init("api")
@@ -74,6 +78,21 @@ async def _overloaded(_request: Request, _exc: Overloaded) -> JSONResponse:
     )
 
 
+@app.exception_handler(InvalidRequest)
+async def _invalid_request(_request: Request, exc: InvalidRequest) -> JSONResponse:
+    return exc.response()
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid_parameters(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A TEA 1.0.0 request with a bad parameter gets 400 and a TEA error body; anything else FastAPI's 422."""
+    prefix, path = _split_api_path(request.url.path)
+    if _API_PREFIXES.get(prefix, False) or path.lstrip("/").split("/", 1)[0] not in _TEA_ENDPOINTS:
+        return await request_validation_exception_handler(request, exc)
+    detail = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+    return InvalidRequest(detail).response()
+
+
 @app.exception_handler(Pending)
 async def _pending(_request: Request, _exc: Pending) -> JSONResponse:
     return JSONResponse(
@@ -83,22 +102,36 @@ async def _pending(_request: Request, _exc: Pending) -> JSONResponse:
     )
 
 
-# TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
-# after probing /.well-known/tea, so the API is mounted under the version prefix too.
-_version_prefix = f"/v{settings.tea_spec_version}"
+# TEA clients construct versioned base URLs (e.g. /v1.0.0/discovery) after probing
+# /.well-known/tea, so the API is mounted under each version prefix. The root serves
+# 1.0.0, the default of a client given a base URL without a version. /v0.3.0-beta.2 is
+# what earlier releases advertised; it serves 0.4.0 so URLs handed out then keep working.
+_API_PREFIXES = {f"/v{TEA_VERSION}": False, f"/v{LEGACY_TEA_VERSION}": True, "/v0.3.0-beta.2": True}
 
 
-@app.head(_version_prefix)
-@app.get(_version_prefix)
-async def version_root() -> dict[str, str]:
-    """Version prefix root — used by TEA clients to probe endpoint reachability."""
-    return {"version": settings.tea_spec_version}
+def _version_root(version: str) -> Any:
+    async def version_root() -> dict[str, str]:
+        """Version prefix root — used by TEA clients to probe endpoint reachability."""
+        return {"version": version}
+
+    return version_root
 
 
-app.include_router(tea.router)
-app.include_router(tea.router, prefix=_version_prefix)
+def _split_api_path(path: str) -> tuple[str, str]:
+    """`/v1.0.0/discovery` -> (`/v1.0.0`, `/discovery`); a path outside the version prefixes keeps an empty one."""
+    prefix = next((p for p in _API_PREFIXES if path == p or path.startswith(p + "/")), "")
+    return prefix, path[len(prefix) :]
+
+
+for _prefix, _legacy in _API_PREFIXES.items():
+    _version = LEGACY_TEA_VERSION if _legacy else TEA_VERSION
+    app.add_api_route(_prefix, _version_root(_version), methods=["GET", "HEAD"])
+    app.include_router(tea.router(_legacy), prefix=_prefix)
+    app.include_router(stats.router, prefix=_prefix)
+app.include_router(tea.common)
+app.include_router(tea.downloads)
+app.include_router(tea.router(legacy=False))
 app.include_router(stats.router)
-app.include_router(stats.router, prefix=_version_prefix)
 app.include_router(pages.router)
 app.include_router(seo.router)
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
@@ -171,9 +204,7 @@ class EdgeMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        path: str = scope["path"]
-        if path.startswith(_version_prefix):
-            path = path[len(_version_prefix) :]
+        path = _split_api_path(scope["path"])[1]
         rule = next((header for prefix, header in _CACHE_RULES if path.startswith(prefix)), None)
         endpoint = path.lstrip("/").split("/", 1)[0]
         tracked = analytics.enabled() and endpoint in _TRACKED_ENDPOINTS
