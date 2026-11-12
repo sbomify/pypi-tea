@@ -181,9 +181,20 @@ def test_fixed_in_is_the_fix_for_the_installed_release_line() -> None:
     assert osv.findings_from_package(entry)[0]["fixed"] == ["0.2.0", "0.2.23"]
 
 
-def test_cves_link_to_insights_and_the_rest_to_osv() -> None:
-    assert pages.vulnerability_url("CVE-2018-18074") == "https://insights.sbomify.com/CVE-2018-18074/"
-    assert pages.vulnerability_url("RUSTSEC-2020-0071") == "https://osv.dev/vulnerability/RUSTSEC-2020-0071"
+def test_advisories_link_to_insights_and_the_rest_to_osv() -> None:
+    insights = "https://insights.sbomify.com"
+    assert pages.vulnerability_url("CVE-2018-18074") == f"{insights}/CVE-2018-18074/"
+    assert pages.vulnerability_url("RUSTSEC-2024-0384") == f"{insights}/RUSTSEC-2024-0384/"
+    assert pages.vulnerability_url("GHSA-x84v-xcm2-53pg") == f"{insights}/GHSA-x84v-xcm2-53pg/"
+    assert pages.vulnerability_url("PYSEC-2024-1") == f"{insights}/PYSEC-2024-1/"
+    assert pages.vulnerability_url("GO-2021-0113") == f"{insights}/GO-2021-0113/"
+    assert pages.vulnerability_url("MAL-2024-9506") == f"{insights}/MAL-2024-9506/"
+    assert pages.vulnerability_url("OSV-2021-1234") == f"{insights}/OSV-2021-1234/"
+    assert pages.vulnerability_url("SUSE-SU-2015:0803-1") == f"{insights}/SUSE-SU-2015-0803-1/"
+    assert pages.vulnerability_url("openSUSE-SU-2016:2484-1") == f"{insights}/openSUSE-SU-2016-2484-1/"
+    # Schemes Insights has no page of their own for stay on OSV.
+    assert pages.vulnerability_url("DSA-5020-1") == "https://osv.dev/vulnerability/DSA-5020-1"
+    assert pages.vulnerability_url("USN-5192-1") == "https://osv.dev/vulnerability/USN-5192-1"
 
 
 def test_severity_labels_follow_cvss() -> None:
