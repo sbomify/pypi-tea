@@ -95,11 +95,17 @@ _SEVERITIES = ("critical", "high", "medium", "low", "none", "unknown")
 
 INSIGHTS_URL = "https://insights.sbomify.com"
 
+# The advisory schemes sbomify Insights publishes a page for under the id itself
+# (the same set sbomify's own trust center links there). Insights folds an advisory
+# into its CVE's page, and a finding with a CVE alias is already shown by the CVE.
+_INSIGHTS_PREFIXES = ("CVE-", "GHSA-", "PYSEC-", "RUSTSEC-", "GO-", "MAL-", "OSV-", "SUSE-", "openSUSE-")
+
 
 def vulnerability_url(vuln_id: str) -> str:
-    """sbomify Insights has a page per CVE; anything without a CVE id goes to OSV."""
-    if vuln_id.startswith("CVE-"):
-        return f"{INSIGHTS_URL}/{quote(vuln_id)}/"
+    """The vulnerability's page on sbomify Insights; OSV for a scheme Insights doesn't publish."""
+    if vuln_id.startswith(_INSIGHTS_PREFIXES):
+        # Insights paths spell a colon (SUSE-SU-2015:0803-1) as a hyphen.
+        return f"{INSIGHTS_URL}/{quote(vuln_id.replace(':', '-'))}/"
     return f"https://osv.dev/vulnerability/{quote(vuln_id)}"
 
 
