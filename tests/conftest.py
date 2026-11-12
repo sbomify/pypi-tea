@@ -159,11 +159,11 @@ def tea_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     settings.database_path, settings.embedded_worker = original
 
 
-@pytest.fixture(scope="module")
-def tea_client(tea_server: str) -> Iterator[Any]:
-    """Session-scoped TeaClient pointing at the in-process server."""
+@pytest.fixture(scope="module", params=["/v1.0.0", "/v0.4.0"])
+def tea_client(tea_server: str, request: pytest.FixtureRequest) -> Iterator[Any]:
+    """TeaClient pointing at the in-process server, once per TEA version it serves."""
     from libtea.client import TeaClient
 
-    client = TeaClient(base_url=tea_server, timeout=60.0)
+    client = TeaClient(base_url=f"{tea_server}{request.param}", timeout=60.0)
     yield client
     client.close()

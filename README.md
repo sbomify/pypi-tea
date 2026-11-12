@@ -107,7 +107,6 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 | `PYPI_TEA_DATABASE_PATH` | `pypi-tea.db` | SQLite database file (shared by API and worker) |
 | `PYPI_TEA_SERVER_ROOT_URL` | `http://localhost:8000` | Public root URL (used in TEA discovery responses, canonical links and the sitemap) |
 | `PYPI_TEA_PYPI_BASE_URL` | `https://pypi.org` | PyPI API base URL |
-| `PYPI_TEA_TEA_SPEC_VERSION` | `0.3.0-beta.2` | TEA spec version to advertise |
 | `PYPI_TEA_ATTESTATION_VERIFICATION` | `true` | Verify PEP 740 attestations |
 | `PYPI_TEA_BIND` | `127.0.0.1:8000` | `pypi-tea-serve` listen address |
 | `PYPI_TEA_WEB_WORKERS` | `0` (one per CPU) | `pypi-tea-serve` process count |
@@ -184,14 +183,16 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 
 ## TEA endpoints
 
+pypi-tea speaks [TEA 1.0.0](https://github.com/CycloneDX/transparency-exchange-api) under `/v1.0.0` and at the root, and TEA 0.4.0 under `/v0.4.0` for older clients. `/.well-known/tea` advertises both. `/v0.3.0-beta.2`, the prefix earlier releases advertised, still serves 0.4.0.
+
 | Endpoint | Description |
 |---|---|
-| `GET /discovery?tei=...` | TEI-based discovery |
+| `GET /discovery?tei=...` or `?purl=...` | Discovery by TEI (`tei://` or `urn:tei:`) or PURL |
 | `GET /products` | List or search products (`idType`, `idValue` query params) |
 | `GET /product/{uuid}` | Get a product |
 | `GET /product/{uuid}/releases` | List releases for a product |
 | `GET /productReleases` | List or search product releases |
-| `GET /productRelease/{uuid}` | Get a product release |
+| `GET /productRelease/{uuid}` | Get a product release with its latest collection |
 | `GET /productRelease/{uuid}/collection/latest` | Latest SBOM collection |
 | `GET /productRelease/{uuid}/collections` | All collections |
 | `GET /productRelease/{uuid}/collection/{version}` | Collection by version |
@@ -201,7 +202,11 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 | `GET /componentRelease/{uuid}/collection/latest` | Latest collection |
 | `GET /componentRelease/{uuid}/collections` | All collections |
 | `GET /componentRelease/{uuid}/collection/{version}` | Collection by version |
-| `GET /artifact/{uuid}` | Get an artifact (SBOM) |
+| `GET /artifact/{uuid}/latest` | Get an artifact (SBOM) |
+| `GET /artifact/{uuid}/{version}` | Artifact by version (always `1`: SBOMs never change) |
+| `GET /artifact/{uuid}/latest/download` | The SBOM itself (`mediaType` query param optional) |
+
+Lists are paged with `pageSize` (at most 100) and the `pageToken` from the previous page's `nextPageToken`. In TEA 0.4.0 they take `pageOffset`, `GET /productRelease/{uuid}` has no collection, collection and component-release lists are plain arrays, and an artifact is `GET /artifact/{uuid}`, downloaded from `GET /artifact/{uuid}/download`.
 
 ### Non-TEA endpoints
 
@@ -212,6 +217,7 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 | `GET /packages` | Browse releases with SBOMs (`page`, `format` query params) |
 | `GET /sitemap.xml` | Sitemap index with per-shard `lastmod`; shards at `/sitemap-{n}.xml`, gzipped when the client accepts it |
 | `GET /attestation/{package}/{version}` | PEP 740 attestation results per wheel |
+| `GET /artifact/{uuid}/download` | SBOM download linked from the package pages |
 | `GET /stats` | Raw statistics JSON |
 | `GET /stats/timeseries` | Daily statistics (30 days) |
 | `GET /healthz` | Liveness: `200` when the database is readable |
@@ -221,13 +227,13 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 Discover SBOMs for a package:
 
 ```bash
-curl "http://localhost:8000/discovery?tei=urn:tei:purl:localhost:pkg:pypi/cyclonedx-python-lib@8.4.0"
+curl "http://localhost:8000/v1.0.0/discovery?purl=pkg:pypi/cyclonedx-python-lib@8.4.0"
 ```
 
 Search by PURL:
 
 ```bash
-curl "http://localhost:8000/products?idType=PURL&idValue=pkg:pypi/cyclonedx-python-lib@8.4.0"
+curl "http://localhost:8000/v1.0.0/products?idType=PURL&idValue=pkg:pypi/cyclonedx-python-lib@8.4.0"
 ```
 
 ## Data model
