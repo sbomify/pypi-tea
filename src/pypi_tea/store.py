@@ -6,12 +6,15 @@ release per transaction, and keep the `counters` behind /stats and the catalog
 listings current as they go.
 """
 
+import hashlib
 import json
 import sqlite3
 import time
 import zlib
 from collections import Counter
 from typing import Any
+
+from packaging.utils import canonicalize_name
 
 from pypi_tea.db import begin
 from pypi_tea.models import Entity, ReleaseRecord, SbomRecord, WheelRecord
@@ -173,7 +176,7 @@ def sbom_families(conn: sqlite3.Connection) -> list[str]:
 
 
 def rebuild_listing(conn: sqlite3.Connection) -> int:
-    """Recompute the name-ordered browse positions for /packages and the sitemap.
+    """Recompute the name-ordered browse positions for /packages.
 
     O(n) in releases with an SBOM, a small fraction of the catalog; run by the worker
     when the SBOM set changes, never per request. /products and /productReleases are
@@ -251,6 +254,135 @@ def all_product_names(conn: sqlite3.Connection) -> list[str]:
 
 def all_release_keys(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in conn.execute("SELECT name, version FROM releases ORDER BY name, version")]
+
+
+# --- sitemap ---
+
+# Google takes up to 50k URLs per sitemap; stay well under so each shard is a cheap range read.
+SITEMAP_SHARD_SIZE = 10_000
+
+
+def sitemap_shards(conn: sqlite3.Connection) -> list[tuple[int, int]]:
+    """(shard, lastmod) for every shard with a URL in it. One row per shard, ~70 at 700k URLs."""
+    return [
+        (r[0], r[1]) for r in conn.execute("SELECT shard, lastmod FROM sitemap_shards WHERE urls > 0 ORDER BY shard")
+    ]
+
+
+def sitemap_shard(conn: sqlite3.Connection, shard: int) -> list[tuple[str, str, int]]:
+    """(name, version, lastmod) of one shard's URLs, a range read over the covering index."""
+    return [
+        (r[0], r[1], r[2])
+        for r in conn.execute(
+            "SELECT name, version, lastmod FROM sitemap WHERE shard = ? ORDER BY name, version", (shard,)
+        )
+    ]
+
+
+def _listed(release: ReleaseRecord) -> bool:
+    """Whether the release's package page answers 200 at its own URL, i.e. belongs in the sitemap."""
+    return release.has_sbom and canonicalize_name(release.name) == release.name
+
+
+def _page_digest(release: ReleaseRecord) -> str:
+    """Hash of everything stored for a release that its package page shows."""
+    wheels = [
+        {
+            "url": w.url,
+            "filename": w.filename,
+            "digests": w.digests,
+            "size": w.size,
+            "error": w.error,
+            "attestation": w.attestation,
+            "sboms": sorted((s.uuid, s.path, s.media_type, s.sha256, s.format, s.valid) for s in w.sboms),
+        }
+        for w in sorted(release.wheels, key=lambda w: w.url)
+    ]
+    page = {"created": release.created, "info": release.info, "wheels": wheels}
+    return hashlib.sha256(json.dumps(page, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _touch_shard(conn: sqlite3.Connection, shard: int, now: int) -> None:
+    conn.execute("UPDATE sitemap_shards SET lastmod = max(lastmod, ?) WHERE shard = ?", (now, shard))
+
+
+def _update_sitemap(conn: sqlite3.Connection, release: ReleaseRecord, now: int) -> None:
+    """Keep one release's sitemap entry current. Touches only the shard the release is in."""
+    name, version = release.name, release.version
+    row = conn.execute("SELECT shard, digest FROM sitemap WHERE name = ? AND version = ?", (name, version)).fetchone()
+    if not _listed(release):
+        if row is not None:
+            conn.execute("DELETE FROM sitemap WHERE name = ? AND version = ?", (name, version))
+            conn.execute("UPDATE sitemap_shards SET urls = urls - 1 WHERE shard = ?", (row["shard"],))
+            _touch_shard(conn, row["shard"], now)
+        return
+    digest = _page_digest(release)
+    if row is None:
+        # New URLs only ever go to the last shard, so no existing shard's contents move.
+        last = conn.execute("SELECT shard, assigned FROM sitemap_shards ORDER BY shard DESC LIMIT 1").fetchone()
+        if last is None:
+            shard = 0
+        elif last["assigned"] < SITEMAP_SHARD_SIZE:
+            shard = int(last["shard"])
+        else:
+            shard = int(last["shard"]) + 1
+        conn.execute(
+            "INSERT INTO sitemap (name, version, shard, lastmod, digest) VALUES (?, ?, ?, ?, ?)",
+            (name, version, shard, now, digest),
+        )
+        conn.execute(
+            """
+            INSERT INTO sitemap_shards (shard, assigned, urls, lastmod) VALUES (?, 1, 1, ?)
+            ON CONFLICT (shard) DO UPDATE SET
+                assigned = assigned + 1, urls = urls + 1, lastmod = max(lastmod, excluded.lastmod)
+            """,
+            (shard, now),
+        )
+    elif row["digest"] != digest:
+        if row["digest"] is None:
+            # Backfilled by the migration with lastmod = resolved_at; record what the page shows now.
+            conn.execute("UPDATE sitemap SET digest = ? WHERE name = ? AND version = ?", (digest, name, version))
+        else:
+            conn.execute(
+                "UPDATE sitemap SET digest = ?, lastmod = ? WHERE name = ? AND version = ?",
+                (digest, now, name, version),
+            )
+            _touch_shard(conn, row["shard"], now)
+
+
+def _touch_sitemap_for_sbom(conn: sqlite3.Connection, sha256: str, now: int) -> None:
+    """Move lastmod of every listed release that ships an SBOM with this hash (its scan findings changed)."""
+    keys = conn.execute("SELECT DISTINCT name, version FROM sboms WHERE sha256 = ?", (sha256,)).fetchall()
+    for name, version in keys:
+        row = conn.execute("SELECT shard FROM sitemap WHERE name = ? AND version = ?", (name, version)).fetchone()
+        if row is not None:
+            conn.execute("UPDATE sitemap SET lastmod = ? WHERE name = ? AND version = ?", (now, name, version))
+            _touch_shard(conn, row["shard"], now)
+
+
+def rebuild_sitemap(conn: sqlite3.Connection) -> None:
+    """Lay out the sitemap from scratch: releases in discovery order, SITEMAP_SHARD_SIZE per shard.
+
+    O(n) in releases. Only run when migrating a store; the caller holds the transaction.
+    lastmod starts at resolved_at, the best record there is of when the page last changed.
+    """
+    conn.create_function("canonical_name", 1, lambda n: str(canonicalize_name(n)), deterministic=True)
+    conn.execute("DELETE FROM sitemap")
+    conn.execute("DELETE FROM sitemap_shards")
+    conn.execute(
+        """
+        INSERT INTO sitemap (name, version, shard, lastmod, digest)
+        SELECT name, version, (row_number() OVER (ORDER BY first_seen, name, version) - 1) / ?, resolved_at, NULL
+        FROM releases WHERE has_sbom = 1 AND canonical_name(name) = name
+        """,
+        (SITEMAP_SHARD_SIZE,),
+    )
+    conn.execute(
+        """
+        INSERT INTO sitemap_shards (shard, assigned, urls, lastmod)
+        SELECT shard, count(*), count(*), max(lastmod) FROM sitemap GROUP BY shard
+        """
+    )
 
 
 # --- stats ---
@@ -552,6 +684,7 @@ def save_release(conn: sqlite3.Connection, release: ReleaseRecord) -> None:
             _append_listing(conn, ALL_PRODUCTS, name, "")
         if not existed:
             _append_listing(conn, ALL_RELEASES, name, version)
+        _update_sitemap(conn, release, now)
         new_totals, new_daily = _contribution(conn, name, version)
         new_totals.subtract(old_totals)
         new_daily.subtract(old_daily)
@@ -637,7 +770,11 @@ def sbom_for_scan(conn: sqlite3.Connection, sha256: str) -> tuple[bytes, str] | 
 def save_osv_scans(
     conn: sqlite3.Connection, scanner: str, results: list[tuple[str, str | None, list[dict[str, Any]]]]
 ) -> None:
-    """Store (sha256, error, findings) for a batch of scans in one transaction."""
+    """Store (sha256, error, findings) for a batch of scans in one transaction.
+
+    A scan whose result differs from the last one changes what the package pages
+    show, so it moves their sitemap lastmod; a rescan that finds the same doesn't.
+    """
     now = int(time.time())
     rows = []
     for sha, error, findings in results:
@@ -646,6 +783,10 @@ def save_osv_scans(
         rows.append((sha, now, scanner, error, len(findings), worst, payload))
     begin(conn)
     try:
+        for sha, _, _, error, _, _, payload in rows:
+            old = conn.execute("SELECT error, findings FROM osv_scans WHERE sha256 = ?", (sha,)).fetchone()
+            if old is None or old["error"] != error or bytes(old["findings"]) != payload:
+                _touch_sitemap_for_sbom(conn, sha, now)
         conn.executemany("INSERT OR REPLACE INTO osv_scans VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
         conn.execute("COMMIT")
     except BaseException:

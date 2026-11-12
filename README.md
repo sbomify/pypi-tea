@@ -53,7 +53,8 @@ A single SQLite database in WAL mode, so any number of API processes read while 
 | `sboms` | Every SBOM found: format, validity, media type, SHA-256, and the content (zlib-compressed) |
 | `osv_scans` | Latest osv-scanner result per SBOM, keyed by its SHA-256: when, which scanner version, an error if osv-scanner couldn't read it, and the findings (zlib-compressed JSON) |
 | `entities` | Deterministic TEA UUID → product / release / component / artifact |
-| `listing` | Materialised browse order, so any page is a primary-key range read. `/packages` and the sitemap are rebuilt by the worker when the set of SBOMs changes; `/products` and `/productReleases` are appended to as releases are discovered |
+| `listing` | Materialised browse order, so any page is a primary-key range read. `/packages` is rebuilt by the worker when the set of SBOMs changes; `/products` and `/productReleases` are appended to as releases are discovered |
+| `sitemap`, `sitemap_shards` | Sitemap URLs in stable shards of 10k: a release keeps the shard it was first given, new ones fill the last shard, so a catalog change rewrites one shard file. `lastmod` moves only when what the page shows changes (SBOMs, wheels, attestations, scan findings). Kept by `save_release` and `save_osv_scans` |
 | `counters`, `daily_counters` | Running totals behind `/stats`, updated in the same transaction as each release |
 | `jobs` | Work queue: interactive lookups (priority 0) ahead of backfill (5) and scheduled refresh (9). Claims are leases, so a crashed worker's job is picked up again |
 | `missing` | Releases PyPI says don't exist, retried after an hour |
@@ -209,7 +210,7 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 | `GET /` | Statistics dashboard (Tailwind + Chart.js) |
 | `GET /package/{name}/{version}` | SBOM page for a release |
 | `GET /packages` | Browse releases with SBOMs (`page`, `format` query params) |
-| `GET /sitemap.xml` | Sitemap index; shards at `/sitemap-{n}.xml` |
+| `GET /sitemap.xml` | Sitemap index with per-shard `lastmod`; shards at `/sitemap-{n}.xml`, gzipped when the client accepts it |
 | `GET /attestation/{package}/{version}` | PEP 740 attestation results per wheel |
 | `GET /stats` | Raw statistics JSON |
 | `GET /stats/timeseries` | Daily statistics (30 days) |
