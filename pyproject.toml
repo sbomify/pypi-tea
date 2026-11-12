@@ -58,6 +58,7 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.4",
     "types-requests>=2.32.4.20260107",
+    "xmlschema>=4.3.2",
 ]
 
 [tool.pytest.ini_options]

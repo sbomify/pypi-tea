@@ -2,6 +2,8 @@
 
 import sqlite3
 
+import pytest
+
 from pypi_tea import db, store
 from pypi_tea.models import ReleaseRecord, SbomRecord, WheelRecord
 from pypi_tea.services.uuids import artifact_uuid
@@ -122,3 +124,105 @@ def test_migration_seeds_counters_and_catalog_listings(database: str) -> None:
     assert _listing(conn, store.ALL_PRODUCTS) == [("b", ""), ("a", "")]
     assert _listing(conn, store.ALL_RELEASES) == [("b", "1"), ("a", "1"), ("b", "2")]
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1_700_000_000
+
+    def time(self) -> float:
+        return float(self.now)
+
+
+def _sitemap(conn: sqlite3.Connection) -> dict[int, list[tuple[str, str, int]]]:
+    return {shard: store.sitemap_shard(conn, shard) for shard, _ in store.sitemap_shards(conn)}
+
+
+def test_sitemap_shards_are_stable(database: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "SITEMAP_SHARD_SIZE", 2)
+    clock = _Clock()
+    monkeypatch.setattr(store, "time", clock)
+    conn = db.connect(database)
+    for name in ("a", "b", "c"):
+        store.save_release(conn, _release(name, "1", [("CycloneDX/1.6", True)]))
+    t0 = clock.now
+    assert _sitemap(conn) == {0: [("a", "1", t0), ("b", "1", t0)], 1: [("c", "1", t0)]}
+
+    # A new release sorts between a and b by name, but only the last shard takes it.
+    clock.now += 100
+    store.save_release(conn, _release("aa", "1", [("CycloneDX/1.6", True)]))
+    assert store.sitemap_shards(conn) == [(0, t0), (1, t0 + 100)]
+    assert _sitemap(conn)[1] == [("aa", "1", t0 + 100), ("c", "1", t0)]
+
+    # Dropping out of the sitemap rewrites only the shard the release was in.
+    clock.now += 100
+    store.save_release(conn, _release("b", "1", []))
+    assert store.sitemap_shards(conn) == [(0, t0 + 200), (1, t0 + 100)]
+    assert _sitemap(conn)[0] == [("a", "1", t0)]
+
+    # Shard 0 had two URLs assigned, so it isn't refilled; shard 1 is full, so a new one opens.
+    clock.now += 100
+    store.save_release(conn, _release("b", "1", [("CycloneDX/1.6", True)]))
+    assert store.sitemap_shards(conn) == [(0, t0 + 200), (1, t0 + 100), (2, t0 + 300)]
+    assert _sitemap(conn)[2] == [("b", "1", t0 + 300)]
+
+
+def test_sitemap_lastmod_follows_page_content(database: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(store, "time", clock)
+    conn = db.connect(database)
+    store.save_release(conn, _release("a", "1", [("CycloneDX/1.6", True)]))
+    t0 = clock.now
+    # A re-resolve that finds the same (the weekly refresh) is not a change.
+    clock.now += 100
+    store.save_release(conn, _release("a", "1", [("CycloneDX/1.6", True)]))
+    assert store.sitemap_shard(conn, 0) == [("a", "1", t0)]
+    assert store.sitemap_shards(conn) == [(0, t0)]
+    # A new attestation is.
+    store.save_release(conn, _release("a", "1", [("CycloneDX/1.6", True)], attested=True))
+    assert store.sitemap_shard(conn, 0) == [("a", "1", t0 + 100)]
+    assert store.sitemap_shards(conn) == [(0, t0 + 100)]
+
+    # So is a vulnerability scan with new findings, but not a rescan that finds the same.
+    sha = "0" * 64
+    clock.now += 100
+    store.save_osv_scans(conn, "osv-scanner", [(sha, None, [])])
+    assert store.sitemap_shard(conn, 0) == [("a", "1", t0 + 200)]
+    clock.now += 100
+    store.save_osv_scans(conn, "osv-scanner", [(sha, None, [])])
+    assert store.sitemap_shard(conn, 0) == [("a", "1", t0 + 200)]
+    store.save_osv_scans(conn, "osv-scanner", [(sha, None, [{"id": "CVE-1", "severity": "HIGH"}])])
+    assert store.sitemap_shard(conn, 0) == [("a", "1", t0 + 300)]
+    assert store.sitemap_shards(conn) == [(0, t0 + 300)]
+
+
+def test_sitemap_lists_only_served_package_pages(database: str) -> None:
+    conn = db.connect(database)
+    store.save_release(conn, _release("a", "1", []))  # no SBOM: the page is a 404
+    store.save_release(conn, _release("Ruamel.YAML", "1", [("CycloneDX/1.6", True)]))  # redirects
+    store.save_release(conn, _release("ruamel-yaml", "1", [("CycloneDX/1.6", True)]))
+    assert [(n, v) for n, v, _ in store.sitemap_shard(conn, 0)] == [("ruamel-yaml", "1")]
+    assert len(store.sitemap_shards(conn)) == 1
+
+
+def test_migration_lays_out_the_sitemap(database: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "SITEMAP_SHARD_SIZE", 2)
+    conn = db.connect(database)
+    for i, name in enumerate(("c", "a", "b", "d", "e")):
+        store.save_release(conn, _release(name, "1", [("CycloneDX/1.6", True)] if name != "d" else []))
+        conn.execute("UPDATE releases SET first_seen = ?, resolved_at = ? WHERE name = ?", (1000 + i, 2000 + i, name))
+    # What a version 3 store looks like: no sitemap tables yet.
+    conn.execute("DROP TABLE sitemap")
+    conn.execute("DROP TABLE sitemap_shards")
+    conn.execute("PRAGMA user_version=3")
+
+    db.init_schema(database)
+
+    assert _sitemap(conn) == {0: [("a", "1", 2001), ("c", "1", 2000)], 1: [("b", "1", 2002), ("e", "1", 2004)]}
+    assert store.sitemap_shards(conn) == [(0, 2001), (1, 2004)]
+    # The first save after the migration records the page digest without calling it a change.
+    store.save_release(conn, _release("a", "1", [("CycloneDX/1.6", True)]))
+    assert _sitemap(conn)[0][0] == ("a", "1", 2001)
+    # Shard 1 is full, so new releases still start a new shard.
+    store.save_release(conn, _release("f", "1", [("CycloneDX/1.6", True)]))
+    assert [s for s, _ in store.sitemap_shards(conn)] == [0, 1, 2]

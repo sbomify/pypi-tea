@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS releases (
@@ -155,6 +155,29 @@ CREATE TABLE IF NOT EXISTS daily_counters (
     PRIMARY KEY (day, kind, key)
 ) WITHOUT ROWID;
 
+-- One row per sitemap URL: every release whose package page is served (it has an
+-- SBOM and a canonical name). A release keeps the shard it was first given for as
+-- long as it is listed, so adding or removing one changes only that shard's file.
+-- lastmod moves when the page's content does; digest is how save_release tells.
+CREATE TABLE IF NOT EXISTS sitemap (
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    shard INTEGER NOT NULL,
+    lastmod INTEGER NOT NULL,
+    digest TEXT,
+    PRIMARY KEY (name, version)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS sitemap_by_shard ON sitemap (shard, name, version, lastmod);
+
+-- Per shard: URLs ever given to it (once full, a shard takes no more, even after
+-- removals), URLs listed in it now, and when its file last changed.
+CREATE TABLE IF NOT EXISTS sitemap_shards (
+    shard INTEGER PRIMARY KEY,
+    assigned INTEGER NOT NULL,
+    urls INTEGER NOT NULL,
+    lastmod INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -224,6 +247,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             store.recount(conn)
             store.rebuild_catalog_listing(conn)
         # 3: osv_scans and the sboms_sha256 index, both created by _SCHEMA; nothing to backfill.
+        if version < 4:
+            # 4: the sitemap is laid out in stable shards rather than read from the browse listing.
+            store.rebuild_sitemap(conn)
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.execute("COMMIT")
     except BaseException:

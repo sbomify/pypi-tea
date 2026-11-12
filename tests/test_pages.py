@@ -4,17 +4,19 @@ import asyncio
 import sqlite3
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from xml.etree import ElementTree
 
 import httpx
 import pytest
+import xmlschema
 
 from conftest import FakePyPI, make_wheel, sbom_wheel
 from pypi_tea import db, jobs, lookup, store
 from pypi_tea.app import app
 from pypi_tea.config import settings
 from pypi_tea.ingest import ingest_release
-from pypi_tea.routes import pages, seo
+from pypi_tea.routes import pages
 
 pytestmark = pytest.mark.anyio
 
@@ -100,17 +102,81 @@ async def test_listing_pagination_and_format_filter(
     assert (await client.get("/packages?format=Bogus")).status_code == 404
 
 
+_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+_DATA = Path(__file__).parent / "data"
+
+
 async def test_sitemap_index_and_shards(
     client: httpx.AsyncClient, fake_pypi: FakePyPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(seo, "SHARD_SIZE", 2)
-    await _seed(fake_pypi, ("a", "1", True), ("b", "1", True), ("c", "1", True))
+    monkeypatch.setattr(store, "SITEMAP_SHARD_SIZE", 2)
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", True), ("c", "1", True), ("d", "1", False))
     index = ElementTree.fromstring((await client.get("/sitemap.xml")).text)
-    locs = [e.text for e in index.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")]
-    assert locs[-2:] == [f"{settings.server_root_url}/sitemap-0.xml", f"{settings.server_root_url}/sitemap-1.xml"]
+    locs = [e.text for e in index.iter(f"{_NS}loc")]
+    root = settings.server_root_url
+    assert locs == [f"{root}/sitemap-pages.xml", f"{root}/sitemap-0.xml", f"{root}/sitemap-1.xml"]
+    shard0 = (await client.get("/sitemap-0.xml")).text
     shard1 = (await client.get("/sitemap-1.xml")).text
+    assert "/package/a/1" in shard0 and "/package/b/1" in shard0
     assert "/package/c/1" in shard1 and "/package/a/1" not in shard1
+    assert "/package/d/1" not in shard0 + shard1
     assert (await client.get("/sitemap-5.xml")).status_code == 404
+
+
+async def test_sitemap_shard_survives_catalog_changes(
+    client: httpx.AsyncClient, fake_pypi: FakePyPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(store, "SITEMAP_SHARD_SIZE", 2)
+    await _seed(fake_pypi, ("b", "1", True), ("c", "1", True), ("d", "1", True))
+    before = {n: (await client.get(f"/sitemap-{n}.xml")).text for n in (0, 1)}
+    # "a" sorts first, and "c" drops out: neither may disturb shard 0's file.
+    fake_pypi.add("c", "1", [("c-1-py3-none-any.whl", make_wheel({"c/__init__.py": b""}))])
+    await _seed(fake_pypi, ("a", "1", True))
+    async with fake_pypi.client() as c:
+        await ingest_release(c, "c", "1")
+    lookup._memo.clear()
+    assert (await client.get("/sitemap-0.xml")).text == before[0]
+    shard1 = (await client.get("/sitemap-1.xml")).text
+    assert shard1 != before[1]
+    assert "/package/a/1" in shard1 and "/package/d/1" in shard1 and "/package/c/1" not in shard1
+
+
+async def test_sitemaps_validate_and_carry_lastmod(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True), ("b", "1", True))
+    urlset = xmlschema.XMLSchema(_DATA / "sitemap.xsd")
+    sitemapindex = xmlschema.XMLSchema(_DATA / "siteindex.xsd")
+    index = (await client.get("/sitemap.xml")).text
+    sitemapindex.validate(index)
+    entries = list(ElementTree.fromstring(index).iter(f"{_NS}sitemap"))
+    assert entries and all(e.find(f"{_NS}lastmod") is not None for e in entries)
+    for path in ("/sitemap-pages.xml", "/sitemap-0.xml"):
+        resp = await client.get(path)
+        assert resp.status_code == 200
+        assert len(resp.content) <= 50 * 1024 * 1024
+        urlset.validate(resp.text)
+        urls = list(ElementTree.fromstring(resp.text).iter(f"{_NS}url"))
+        assert 0 < len(urls) <= 50_000
+        for url in urls:
+            assert {child.tag for child in url} == {f"{_NS}loc", f"{_NS}lastmod"}
+    # Every listed package URL is the canonical page itself.
+    for loc in ElementTree.fromstring((await client.get("/sitemap-0.xml")).text).iter(f"{_NS}loc"):
+        assert loc.text is not None
+        page = await client.get(loc.text.removeprefix(settings.server_root_url))
+        assert page.status_code == 200
+        assert f'href="{loc.text}"' in page.text and "noindex" not in page.text
+
+
+async def test_sitemaps_are_gzipped_on_request(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("a", "1", True))
+    for path in ("/sitemap.xml", "/sitemap-pages.xml", "/sitemap-0.xml"):
+        plain = await client.get(path, headers={"Accept-Encoding": "identity"})
+        assert "content-encoding" not in plain.headers
+        assert plain.headers["vary"] == "Accept-Encoding"
+        zipped = await client.get(path, headers={"Accept-Encoding": "br, gzip;q=0.8"})
+        assert zipped.headers["content-encoding"] == "gzip"
+        assert zipped.text == plain.text  # httpx decodes it
+        refused = await client.get(path, headers={"Accept-Encoding": "gzip;q=0"})
+        assert "content-encoding" not in refused.headers
 
 
 async def test_robots_keeps_crawlers_off_the_api(client: httpx.AsyncClient) -> None:
