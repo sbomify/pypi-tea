@@ -4,7 +4,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_path: str = "pypi-tea.db"
     pypi_base_url: str = "https://pypi.org"
-    tea_spec_version: str = "0.3.0-beta.2"
     server_root_url: str = "http://localhost:8000"
     attestation_verification: bool = True
 

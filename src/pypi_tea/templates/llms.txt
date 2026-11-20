@@ -19,7 +19,7 @@ Machine-readable versions of every page:
 
 ## TEA API
 
-- Discovery: {{ server_root_url }}/.well-known/tea, API under {{ server_root_url }}/v{{ tea_spec_version }}/
+- Discovery: {{ server_root_url }}/.well-known/tea, TEA 1.0.0 API under {{ server_root_url }}/v{{ tea_spec_version }}/ (0.4.0 under /v0.4.0/)
 - Client: `pip install libtea`, then `python -m libtea {{ server_root_url }} pkg:pypi/<name>@<version>`
 - A release that hasn't been looked up before is fetched from PyPI on the first TEA query; the API may answer 503 with Retry-After while it is indexed.
 
