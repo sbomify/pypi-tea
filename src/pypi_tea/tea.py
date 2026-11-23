@@ -26,9 +26,10 @@ from libtea.models import (
     ReleaseDistribution,
     TeaServerInfo,
 )
-from libtea.server import tea_datetime_serializer
+from libtea.server import to_wire
 from packageurl import PackageURL
 from packaging.utils import canonicalize_name
+from pydantic import BaseModel
 
 from pypi_tea.config import settings
 from pypi_tea.models import ReleaseRecord, SbomRecord, WheelRecord
@@ -65,11 +66,19 @@ def parse_purl(purl_str: str) -> tuple[str, str | None, PurlQualifiers]:
     )
 
 
+def _legacy[M: BaseModel](model: type[M], **fields: Any) -> M:
+    """Build a model under TEA 0.4.0 rules. libtea checks models built in Python against 1.0.0, which
+    requires fields 0.4.0 doesn't define (an artifact's `version`) and rejects MD5, which PyPI digests carry."""
+    return model.model_validate(fields, context={"tea_legacy": True})
+
+
+def _checksum(alg: ChecksumAlgorithm, value: str) -> Checksum:
+    return _legacy(Checksum, algType=alg, algValue=value)
+
+
 def _checksums(digests: dict[str, str]) -> tuple[Checksum, ...]:
     return tuple(
-        Checksum(algType=_CHECKSUM_ALGS[alg.lower()], algValue=value)
-        for alg, value in digests.items()
-        if alg.lower() in _CHECKSUM_ALGS
+        _checksum(_CHECKSUM_ALGS[alg.lower()], value) for alg, value in digests.items() if alg.lower() in _CHECKSUM_ALGS
     )
 
 
@@ -80,18 +89,9 @@ def _created(release: ReleaseRecord) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC)
 
 
-def dump(model: Any) -> dict[str, Any]:
-    return _serialize(model.model_dump(by_alias=True))  # type: ignore[no-any-return]
-
-
-def _serialize(v: Any) -> Any:
-    if isinstance(v, datetime):
-        return tea_datetime_serializer(v if v.tzinfo else v.replace(tzinfo=UTC))
-    if isinstance(v, dict):
-        return {k: _serialize(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_serialize(x) for x in v]
-    return v
+def dump(model: BaseModel) -> Any:
+    """Serialize a libtea model to the TEA wire format of the version this server speaks."""
+    return to_wire(model, legacy=True)
 
 
 def product(name: str) -> Product:
@@ -104,7 +104,8 @@ def product(name: str) -> Product:
 
 def artifact(wheel: WheelRecord, sbom: SbomRecord) -> Artifact:
     url = f"{settings.server_root_url}/v{settings.tea_spec_version}/artifact/{sbom.uuid}/download"
-    return Artifact(
+    return _legacy(
+        Artifact,
         uuid=sbom.uuid,
         name=sbom.path.rsplit("/", 1)[-1],
         type=ArtifactType.BOM,
@@ -112,7 +113,7 @@ def artifact(wheel: WheelRecord, sbom: SbomRecord) -> Artifact:
             ArtifactFormat(
                 media_type=sbom.media_type,
                 url=url,
-                checksums=(Checksum(algType=ChecksumAlgorithm.SHA_256, algValue=sbom.sha256),),
+                checksums=(_checksum(ChecksumAlgorithm.SHA_256, sbom.sha256),),
             ),
         ),
     )
@@ -135,7 +136,7 @@ def component_release(release: ReleaseRecord, wheel: WheelRecord) -> Release:
         created_date=_created(release),
         identifiers=(Identifier(id_type=IdentifierType.PURL, id_value=wheel.url),),
         distributions=(
-            ReleaseDistribution(distribution_type="wheel", url=wheel.url, checksums=_checksums(wheel.digests)),
+            ReleaseDistribution(distribution_id="wheel", url=wheel.url, checksums=_checksums(wheel.digests)),
         ),
     )
 
@@ -144,7 +145,7 @@ def component_collection(release: ReleaseRecord, wheel: WheelRecord) -> Collecti
     return Collection(
         uuid=component_release_uuid(wheel.url),
         version=1,
-        date=_created(release),
+        created_date=_created(release),
         belongs_to=CollectionBelongsTo.COMPONENT_RELEASE,
         update_reason=CollectionUpdateReason(type=CollectionUpdateReasonType.INITIAL_RELEASE),
         artifacts=tuple(artifact(wheel, s) for s in wheel.sboms),
@@ -177,7 +178,7 @@ def product_collection(release: ReleaseRecord, wheels: list[WheelRecord] | None 
     return Collection(
         uuid=product_release_uuid(release.name, release.version),
         version=1,
-        date=_created(release),
+        created_date=_created(release),
         belongs_to=CollectionBelongsTo.PRODUCT_RELEASE,
         update_reason=CollectionUpdateReason(type=CollectionUpdateReasonType.INITIAL_RELEASE),
         artifacts=tuple(artifact(w, s) for w in wheels for s in w.sboms),

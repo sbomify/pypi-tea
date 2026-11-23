@@ -74,7 +74,7 @@ PyPI Package → TEA Product, Version → ProductRelease, Wheel file → Compone
 
 ### Testing
 
-`tests/conftest.py` provides a temp `database` fixture, a `FakePyPI` httpx transport (JSON API + range-capable wheels), and a session `tea_server` running the real app with an embedded worker against live PyPI for `libtea`'s conformance checks. `tests/test_osv.py` stands in a small script for osv-scanner, so no test needs the binary or the OSV API. 21/26 conformance checks pass; 5 CLE checks are skipped (not implemented).
+`tests/conftest.py` provides a temp `database` fixture, a `FakePyPI` httpx transport (JSON API + range-capable wheels), and a session `tea_server` running the real app with an embedded worker against live PyPI for `libtea`'s conformance checks. `tests/test_osv.py` stands in a small script for osv-scanner, so no test needs the binary or the OSV API. 22/28 conformance checks pass; 5 CLE checks are skipped (not implemented) and `pagination_token` applies to TEA 1.x only.
 
 ## Conventions
 

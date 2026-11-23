@@ -161,9 +161,12 @@ def tea_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def tea_client(tea_server: str) -> Iterator[Any]:
-    """Session-scoped TeaClient pointing at the in-process server."""
+    """Session-scoped TeaClient pointing at the in-process server.
+
+    Through the versioned mount, as `.well-known/tea` directs clients: libtea reads the spec version from the
+    base URL and takes an unversioned one to mean TEA 1.0.0."""
     from libtea.client import TeaClient
 
-    client = TeaClient(base_url=tea_server, timeout=60.0)
+    client = TeaClient(base_url=f"{tea_server}/v{settings.tea_spec_version}", timeout=60.0)
     yield client
     client.close()

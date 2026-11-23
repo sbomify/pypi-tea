@@ -20,7 +20,7 @@ from pypi_tea.usage import usage
 router = APIRouter()
 
 MAX_PAGE_SIZE = 100
-_404 = ErrorResponse(error=ErrorType.OBJECT_UNKNOWN).model_dump(by_alias=True)
+_404 = tea.dump(ErrorResponse(error=ErrorType.OBJECT_UNKNOWN))
 
 
 def not_found() -> JSONResponse:
@@ -106,10 +106,12 @@ def _wheel(release: ReleaseRecord, url: str | None) -> WheelRecord | None:
 
 @router.get("/.well-known/tea")
 async def well_known_tea() -> Any:
-    return TeaWellKnown(
-        schemaVersion=1,
-        endpoints=(TeaEndpoint(url=settings.server_root_url, versions=(settings.tea_spec_version,), priority=1.0),),
-    ).model_dump(by_alias=True)
+    return tea.dump(
+        TeaWellKnown(
+            schemaVersion=1,
+            endpoints=(TeaEndpoint(url=settings.server_root_url, versions=(settings.tea_spec_version,), priority=1.0),),
+        )
+    )
 
 
 @router.get("/discovery")
@@ -127,7 +129,7 @@ async def discovery(tei: str = Query(...)) -> Any:
     if resolved is None:
         return not_found()
     release, _ = resolved
-    return [d.model_dump(by_alias=True) for d in tea.discovery_info(release.name, release.version)]
+    return [tea.dump(d) for d in tea.discovery_info(release.name, release.version)]
 
 
 # --- products ---
@@ -146,18 +148,18 @@ async def list_or_search_products(
             return _page([], pageOffset, size, 0)
         resolved = await _resolve_purl(idValue, "products")
         if resolved is not None:
-            return _page([tea.product(resolved[0].name).model_dump(by_alias=True)], pageOffset, size, 1)
+            return _page([tea.dump(tea.product(resolved[0].name))], pageOffset, size, 1)
         try:
             name, _, _ = tea.parse_purl(idValue)
         except ValueError:
             return _page([], pageOffset, size, 0)
         if await read(store.product_exists, name):
-            return _page([tea.product(name).model_dump(by_alias=True)], pageOffset, size, 1)
+            return _page([tea.dump(tea.product(name))], pageOffset, size, 1)
         return _page([], pageOffset, size, 0)
 
     names = await read(store.list_products, pageOffset, size)
     total = await read(store.count_products)
-    return _page([tea.product(n).model_dump(by_alias=True) for n in names], pageOffset, size, total)
+    return _page([tea.dump(tea.product(n)) for n in names], pageOffset, size, total)
 
 
 @router.get("/product/{uuid}")
@@ -165,7 +167,7 @@ async def get_product(uuid: str) -> Any:
     entity = await _entity(uuid, "product")
     if entity is None:
         return not_found()
-    return tea.product(entity.name).model_dump(by_alias=True)
+    return tea.dump(tea.product(entity.name))
 
 
 @router.get("/product/{uuid}/releases")
@@ -263,7 +265,7 @@ async def _component(uuid: str, kind: str) -> tuple[ReleaseRecord, WheelRecord] 
 @router.get("/component/{uuid}")
 async def get_component(uuid: str) -> Any:
     found = await _component(uuid, "component")
-    return not_found() if found is None else tea.component(found[1]).model_dump(by_alias=True)
+    return not_found() if found is None else tea.dump(tea.component(found[1]))
 
 
 @router.get("/component/{uuid}/releases")
@@ -307,7 +309,7 @@ async def get_artifact(uuid: str) -> Any:
         return not_found()
     _, wheel = found
     sbom = next((s for s in wheel.sboms if s.uuid == uuid), None)
-    return not_found() if sbom is None else tea.artifact(wheel, sbom).model_dump(by_alias=True)
+    return not_found() if sbom is None else tea.dump(tea.artifact(wheel, sbom))
 
 
 @router.get("/artifact/{uuid}/download")
