@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 from libtea.models import (
     Artifact,
@@ -22,21 +21,33 @@ from libtea.models import (
     IdentifierType,
     Product,
     ProductRelease,
+    ProductReleaseWithCollection,
     Release,
     ReleaseDistribution,
     TeaServerInfo,
 )
-from libtea.server import tea_datetime_serializer
 from packageurl import PackageURL
 from packaging.utils import canonicalize_name
 
 from pypi_tea.config import settings
 from pypi_tea.models import ReleaseRecord, SbomRecord, WheelRecord
-from pypi_tea.services.uuids import component_release_uuid, component_uuid, product_release_uuid, product_uuid
+from pypi_tea.services.uuids import (
+    component_release_uuid,
+    component_uuid,
+    distribution_uuid,
+    product_release_uuid,
+    product_uuid,
+)
 
+# The TEA API version this server speaks; it is served at the root and under /v1.0.0.
+TEA_VERSION = "1.0.0"
+# The older version also served, so existing clients keep working.
+LEGACY_TEA_VERSION = "0.4.0"
+TEA_VERSIONS = (TEA_VERSION, LEGACY_TEA_VERSION)
+
+# TEA 1.0.0 dropped MD5, so PyPI's md5 digest is not published.
 _CHECKSUM_ALGS = {
     "sha256": ChecksumAlgorithm.SHA_256,
-    "md5": ChecksumAlgorithm.MD5,
     "sha384": ChecksumAlgorithm.SHA_384,
     "sha512": ChecksumAlgorithm.SHA_512,
     "blake2b_256": ChecksumAlgorithm.BLAKE2B_256,
@@ -80,20 +91,6 @@ def _created(release: ReleaseRecord) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC)
 
 
-def dump(model: Any) -> dict[str, Any]:
-    return _serialize(model.model_dump(by_alias=True))  # type: ignore[no-any-return]
-
-
-def _serialize(v: Any) -> Any:
-    if isinstance(v, datetime):
-        return tea_datetime_serializer(v if v.tzinfo else v.replace(tzinfo=UTC))
-    if isinstance(v, dict):
-        return {k: _serialize(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_serialize(x) for x in v]
-    return v
-
-
 def product(name: str) -> Product:
     return Product(
         uuid=product_uuid(name),
@@ -102,12 +99,18 @@ def product(name: str) -> Product:
     )
 
 
-def artifact(wheel: WheelRecord, sbom: SbomRecord) -> Artifact:
-    url = f"{settings.server_root_url}/v{settings.tea_spec_version}/artifact/{sbom.uuid}/download"
+def artifact(release: ReleaseRecord, sbom: SbomRecord, legacy: bool = False) -> Artifact:
+    """An SBOM as a TEA artifact. Artifacts never change, so each has one version, 1."""
+    if legacy:
+        url = f"{settings.server_root_url}/v{LEGACY_TEA_VERSION}/artifact/{sbom.uuid}/download"
+    else:
+        url = f"{settings.server_root_url}/v{TEA_VERSION}/artifact/{sbom.uuid}/1/download"
     return Artifact(
         uuid=sbom.uuid,
         name=sbom.path.rsplit("/", 1)[-1],
         type=ArtifactType.BOM,
+        version=1,
+        created_date=_created(release),
         formats=(
             ArtifactFormat(
                 media_type=sbom.media_type,
@@ -135,25 +138,32 @@ def component_release(release: ReleaseRecord, wheel: WheelRecord) -> Release:
         created_date=_created(release),
         identifiers=(Identifier(id_type=IdentifierType.PURL, id_value=wheel.url),),
         distributions=(
-            ReleaseDistribution(distribution_type="wheel", url=wheel.url, checksums=_checksums(wheel.digests)),
+            ReleaseDistribution(
+                distribution_id=distribution_uuid(wheel.url),
+                description="wheel",
+                url=wheel.url,
+                checksums=_checksums(wheel.digests),
+            ),
         ),
     )
 
 
-def component_collection(release: ReleaseRecord, wheel: WheelRecord) -> Collection:
+def component_collection(release: ReleaseRecord, wheel: WheelRecord, legacy: bool = False) -> Collection:
     return Collection(
         uuid=component_release_uuid(wheel.url),
         version=1,
-        date=_created(release),
+        created_date=_created(release),
         belongs_to=CollectionBelongsTo.COMPONENT_RELEASE,
         update_reason=CollectionUpdateReason(type=CollectionUpdateReasonType.INITIAL_RELEASE),
-        artifacts=tuple(artifact(wheel, s) for s in wheel.sboms),
+        artifacts=tuple(artifact(release, s, legacy) for s in wheel.sboms),
     )
 
 
-def component_release_with_collection(release: ReleaseRecord, wheel: WheelRecord) -> ComponentReleaseWithCollection:
+def component_release_with_collection(
+    release: ReleaseRecord, wheel: WheelRecord, legacy: bool = False
+) -> ComponentReleaseWithCollection:
     return ComponentReleaseWithCollection(
-        release=component_release(release, wheel), latest_collection=component_collection(release, wheel)
+        release=component_release(release, wheel), latest_collection=component_collection(release, wheel, legacy)
     )
 
 
@@ -172,22 +182,26 @@ def product_release(release: ReleaseRecord, wheels: list[WheelRecord] | None = N
     )
 
 
-def product_collection(release: ReleaseRecord, wheels: list[WheelRecord] | None = None) -> Collection:
-    wheels = release.wheels if wheels is None else wheels
+def product_collection(release: ReleaseRecord, legacy: bool = False) -> Collection:
     return Collection(
         uuid=product_release_uuid(release.name, release.version),
         version=1,
-        date=_created(release),
+        created_date=_created(release),
         belongs_to=CollectionBelongsTo.PRODUCT_RELEASE,
         update_reason=CollectionUpdateReason(type=CollectionUpdateReasonType.INITIAL_RELEASE),
-        artifacts=tuple(artifact(w, s) for w in wheels for s in w.sboms),
+        artifacts=tuple(artifact(release, s, legacy) for w in release.wheels for s in w.sboms),
     )
+
+
+def product_release_with_collection(release: ReleaseRecord) -> ProductReleaseWithCollection:
+    """TEA 1.0.0's `/productRelease/{uuid}`: the release with its latest collection."""
+    return ProductReleaseWithCollection(**dict(product_release(release)), latest_collection=product_collection(release))
 
 
 def discovery_info(name: str, version: str) -> list[DiscoveryInfo]:
     return [
         DiscoveryInfo(
             product_release_uuid=product_release_uuid(name, version),
-            servers=(TeaServerInfo(root_url=settings.server_root_url, versions=(settings.tea_spec_version,)),),
+            servers=(TeaServerInfo(root_url=settings.server_root_url, versions=TEA_VERSIONS),),
         )
     ]

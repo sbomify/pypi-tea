@@ -3,13 +3,15 @@ from typing import Any
 import pytest
 from libtea.conformance._checks import ALL_CHECKS, CheckContext
 from libtea.conformance._types import CheckStatus
+from libtea.discovery import purl_tei
 
-TEI = "urn:tei:purl:localhost:pkg:pypi/libtea@0.4.0"
+PURL = "pkg:pypi/libtea@0.4.0"
 
 
-@pytest.fixture(scope="session")
-def check_context() -> CheckContext:
-    return CheckContext(tei=TEI)
+@pytest.fixture(scope="module")
+def check_context(tea_client: Any) -> CheckContext:
+    """One context per TEA version: checks record UUIDs in it for the checks after them."""
+    return CheckContext(tei=f"urn:tei:purl:localhost:{PURL}" if tea_client.is_legacy else purl_tei("localhost", PURL))
 
 
 @pytest.mark.parametrize("check_fn", ALL_CHECKS, ids=[fn.__name__ for fn in ALL_CHECKS])
