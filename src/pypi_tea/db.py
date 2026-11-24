@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS releases (
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS wheels (
     attestation TEXT
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS wheels_release ON wheels (name, version);
+-- wheels_filename, the order of the TEA /components listing, is created by _migrate (step 5).
 
 CREATE TABLE IF NOT EXISTS sboms (
     uuid TEXT PRIMARY KEY,
@@ -250,6 +251,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if version < 4:
             # 4: the sitemap is laid out in stable shards rather than read from the browse listing.
             store.rebuild_sitemap(conn)
+        if version < 5:
+            # 5: TEA 1.0.0 lists components by name, which is the wheel's filename. Built here rather
+            # than in _SCHEMA so a large store builds it under the migration's long busy timeout.
+            conn.execute("CREATE INDEX IF NOT EXISTS wheels_filename ON wheels (filename)")
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.execute("COMMIT")
     except BaseException:

@@ -19,7 +19,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import PlainTextResponse
 
 from pypi_tea import store
-from pypi_tea.config import settings
+from pypi_tea.config import TEA_VERSION, settings
 from pypi_tea.lookup import memoized
 
 router = APIRouter()
@@ -40,7 +40,7 @@ _DISALLOW = (
     "/stats",
     # The versioned TEA API mount (see `app._version_prefix`). Spelled out so the
     # rule doesn't also hide any future page whose path happens to start with "v".
-    f"/v{settings.tea_spec_version}",
+    f"/v{TEA_VERSION}",
 )
 
 

@@ -44,6 +44,8 @@ class ReleaseRecord:
     created: str | None
     info: dict[str, Any]
     wheels: list[WheelRecord]
+    # When the store first saved the release (epoch seconds); None until it has.
+    first_seen: int | None = None
 
     @property
     def has_sbom(self) -> bool:

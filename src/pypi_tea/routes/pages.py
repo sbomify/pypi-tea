@@ -19,7 +19,7 @@ from jinja2 import Environment, FileSystemLoader
 from packaging.utils import canonicalize_name
 
 from pypi_tea import jobs, store
-from pypi_tea.config import settings
+from pypi_tea.config import TEA_VERSION, settings
 from pypi_tea.lookup import memoized, read
 from pypi_tea.models import ReleaseRecord
 from pypi_tea.services import osv
@@ -66,6 +66,7 @@ _text_env.filters["md_url"] = md_url
 def render(template_name: str, **ctx: Any) -> str:
     ctx.setdefault("app_version", _VERSION)
     ctx.setdefault("server_root_url", settings.server_root_url)
+    ctx.setdefault("tea_version", TEA_VERSION)
     ctx.setdefault("posthog_api_key", settings.posthog_api_key)
     ctx.setdefault("posthog_host", settings.posthog_host)
     env = _jinja_env if template_name.endswith(".html") else _text_env
@@ -338,6 +339,4 @@ async def dashboard_markdown() -> Response:
 
 @router.get("/llms.txt", response_class=PlainTextResponse)
 async def llms_txt() -> PlainTextResponse:
-    return PlainTextResponse(
-        render("llms.txt", tea_spec_version=settings.tea_spec_version), headers={"Cache-Control": DASHBOARD_CACHE}
-    )
+    return PlainTextResponse(render("llms.txt"), headers={"Cache-Control": DASHBOARD_CACHE})

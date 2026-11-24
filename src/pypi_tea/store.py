@@ -58,7 +58,7 @@ _SBOM_COLUMNS = "uuid, wheel_url, path, media_type, sha256, format, valid"
 
 def get_release(conn: sqlite3.Connection, name: str, version: str) -> ReleaseRecord | None:
     row = conn.execute(
-        "SELECT name, version, created, info FROM releases WHERE name = ? AND version = ?", (name, version)
+        "SELECT name, version, created, first_seen, info FROM releases WHERE name = ? AND version = ?", (name, version)
     ).fetchone()
     if row is None:
         return None
@@ -78,6 +78,7 @@ def get_release(conn: sqlite3.Connection, name: str, version: str) -> ReleaseRec
         created=row["created"],
         info=json.loads(row["info"]),
         wheels=list(wheels.values()),
+        first_seen=row["first_seen"],
     )
 
 
@@ -127,31 +128,55 @@ def _listing_count(conn: sqlite3.Connection, family: str) -> int:
     return int(row[0] or 0)
 
 
-def list_products(conn: sqlite3.Connection, offset: int, limit: int) -> list[str]:
-    return [r["name"] for r in _listing_page(conn, ALL_PRODUCTS, offset, limit)]
+def _keyset(columns: tuple[str, ...], after: tuple[object, ...] | None, desc: bool) -> tuple[str, str]:
+    """`AND (...) > (...)` resuming after the row keyed `after`, and the matching ORDER BY, for an index range read."""
+    order = ", ".join(f"{c} {'DESC' if desc else 'ASC'}" for c in columns)
+    if after is None:
+        return "", order
+    return f"AND ({', '.join(columns)}) {'<' if desc else '>'} ({', '.join('?' * len(after))})", order
 
 
-def count_products(conn: sqlite3.Connection) -> int:
-    return _listing_count(conn, ALL_PRODUCTS)
+def product_names_page(conn: sqlite3.Connection, after: tuple[str] | None, limit: int, desc: bool) -> list[str]:
+    """Product names in name order, after the name in `after`: a walk of the releases primary key."""
+    where, order = _keyset(("name",), after, desc)
+    rows = conn.execute(
+        f"SELECT DISTINCT name FROM releases WHERE 1 {where} ORDER BY {order} LIMIT ?", (*(after or ()), limit)
+    )
+    return [r[0] for r in rows]
 
 
 def product_exists(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM releases WHERE name = ? LIMIT 1", (name,)).fetchone() is not None
 
 
-def list_release_keys(conn: sqlite3.Connection, offset: int, limit: int) -> list[tuple[str, str]]:
-    return [(r["name"], r["version"]) for r in _listing_page(conn, ALL_RELEASES, offset, limit)]
-
-
-def count_listed_releases(conn: sqlite3.Connection) -> int:
-    return _listing_count(conn, ALL_RELEASES)
-
-
-def product_release_versions(conn: sqlite3.Connection, name: str) -> list[str]:
+def release_keys_page(
+    conn: sqlite3.Connection, after: tuple[int] | None, limit: int, desc: bool
+) -> list[tuple[int, str, str]]:
+    """(pos, name, version) in the order releases were first stored, i.e. by first_seen, after the pos in `after`."""
+    where, order = _keyset(("pos",), after, desc)
     rows = conn.execute(
-        "SELECT version FROM releases WHERE name = ? ORDER BY created DESC, version DESC", (name,)
-    ).fetchall()
-    return [r["version"] for r in rows]
+        f"SELECT pos, name, version FROM listing WHERE family = ? {where} ORDER BY {order} LIMIT ?",
+        (ALL_RELEASES, *(after or ()), limit),
+    )
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def product_release_dates(conn: sqlite3.Connection, name: str) -> list[tuple[str, int, str | None]]:
+    """(version, first_seen, created) of every stored release of a product."""
+    rows = conn.execute("SELECT version, first_seen, created FROM releases WHERE name = ?", (name,))
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def wheels_page(
+    conn: sqlite3.Connection, after: tuple[str, str] | None, limit: int, desc: bool
+) -> list[tuple[str, str, str, str]]:
+    """(filename, url, name, version) of every stored wheel in filename order, after the wheel keyed `after`."""
+    where, order = _keyset(("filename", "url"), after, desc)
+    rows = conn.execute(
+        f"SELECT filename, url, name, version FROM wheels WHERE 1 {where} ORDER BY {order} LIMIT ?",
+        (*(after or ()), limit),
+    )
+    return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
 def packages_with_sbom(

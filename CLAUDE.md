@@ -55,7 +55,7 @@ Request flow for a TEI/PURL: route handler → `lookup.ensure_release()` → sto
 - **`ingest.py`** — resolve one release; reuses already-inspected wheels (immutable) and only re-checks non-final attestations
 - **`worker.py`** — `pypi-tea-worker`: N job loops plus a scheduler (SBOM listing rebuild as soon as the SBOM set changes, at most a 10% duty cycle; weekly refresh)
 - **`scan.py`** — `pypi-tea-osv`: a separate, timer-driven process that runs osv-scanner over SBOMs due a scan (by content hash) and writes `osv_scans`; the package pages read it
-- **`tea.py`** — pure builders from stored records to `libtea.models`
+- **`tea.py`** — pure builders from stored records to TEA 1.0.0 `libtea.models`; serialize them with `libtea.server.to_wire`
 - **`usage.py`** — in-memory usage counters flushed to SQLite every 10 s
 - **`analytics.py`** — PostHog events (queued, sent by a background thread; never raises). `EdgeMiddleware` binds the caller's anonymous id per request; browser events come from `templates/_analytics.html` and `data-ph-*` attributes
 - **`services/`** — `pypi.py` (JSON API, wheel platform filter), `wheel_reader.py` (async range-request ZIP reader), `sbom_format.py`, `attestation.py`, `uuids.py`, `osv.py` (runs osv-scanner and reduces its report to page findings)
@@ -74,7 +74,7 @@ PyPI Package → TEA Product, Version → ProductRelease, Wheel file → Compone
 
 ### Testing
 
-`tests/conftest.py` provides a temp `database` fixture, a `FakePyPI` httpx transport (JSON API + range-capable wheels), and a session `tea_server` running the real app with an embedded worker against live PyPI for `libtea`'s conformance checks. `tests/test_osv.py` stands in a small script for osv-scanner, so no test needs the binary or the OSV API. 21/26 conformance checks pass; 5 CLE checks are skipped (not implemented).
+`tests/conftest.py` provides a temp `database` fixture, a `FakePyPI` httpx transport (JSON API + range-capable wheels), and a session `tea_server` running the real app with an embedded worker against live PyPI for `libtea`'s conformance checks, run against the `/v1.0.0` mount. `tests/test_tea_api.py` covers the TEA 1.0.0 behaviour conformance doesn't check, offline. `tests/test_osv.py` stands in a small script for osv-scanner, so no test needs the binary or the OSV API. 23/28 conformance checks pass; the 5 CLE checks are skipped (PyPI has no lifecycle data) and any other skip fails the test.
 
 ## Conventions
 

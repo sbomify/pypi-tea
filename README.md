@@ -107,7 +107,6 @@ All settings are configurable via environment variables with the `PYPI_TEA_` pre
 | `PYPI_TEA_DATABASE_PATH` | `pypi-tea.db` | SQLite database file (shared by API and worker) |
 | `PYPI_TEA_SERVER_ROOT_URL` | `http://localhost:8000` | Public root URL (used in TEA discovery responses, canonical links and the sitemap) |
 | `PYPI_TEA_PYPI_BASE_URL` | `https://pypi.org` | PyPI API base URL |
-| `PYPI_TEA_TEA_SPEC_VERSION` | `0.3.0-beta.2` | TEA spec version to advertise |
 | `PYPI_TEA_ATTESTATION_VERIFICATION` | `true` | Verify PEP 740 attestations |
 | `PYPI_TEA_BIND` | `127.0.0.1:8000` | `pypi-tea-serve` listen address |
 | `PYPI_TEA_WEB_WORKERS` | `0` (one per CPU) | `pypi-tea-serve` process count |
@@ -185,24 +184,38 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 
 ## TEA endpoints
 
+pypi-tea serves [TEA 1.0.0](https://github.com/CycloneDX/transparency-exchange-api). `/.well-known/tea` advertises it at `/v1.0.0`, and the same API also answers at the root.
+
 | Endpoint | Description |
 |---|---|
-| `GET /discovery?tei=...` | TEI-based discovery |
-| `GET /products` | List or search products (`idType`, `idValue` query params) |
+| `GET /discovery?tei=...` or `?purl=...` | Resolve a `purl` TEI (`tei://` or `urn:tei:` form) or a PURL to its product release |
+| `GET /products` | List or search products (`idType=PURL`, `idValue`) |
 | `GET /product/{uuid}` | Get a product |
 | `GET /product/{uuid}/releases` | List releases for a product |
 | `GET /productReleases` | List or search product releases |
-| `GET /productRelease/{uuid}` | Get a product release |
+| `GET /productRelease/{uuid}` | Get a product release with its latest collection |
 | `GET /productRelease/{uuid}/collection/latest` | Latest SBOM collection |
 | `GET /productRelease/{uuid}/collections` | All collections |
 | `GET /productRelease/{uuid}/collection/{version}` | Collection by version |
-| `GET /component/{uuid}` | Get a component (wheel) |
+| `GET /components` | List or search components (wheels) |
+| `GET /component/{uuid}` | Get a component |
 | `GET /component/{uuid}/releases` | Component releases |
-| `GET /componentRelease/{uuid}` | Get a component release with collection |
+| `GET /componentReleases` | List or search component releases |
+| `GET /componentRelease/{uuid}` | Get a component release with its latest collection |
 | `GET /componentRelease/{uuid}/collection/latest` | Latest collection |
 | `GET /componentRelease/{uuid}/collections` | All collections |
 | `GET /componentRelease/{uuid}/collection/{version}` | Collection by version |
-| `GET /artifact/{uuid}` | Get an artifact (SBOM) |
+| `GET /artifact/{uuid}/latest`, `/artifact/{uuid}/1` | Get an artifact (SBOM) |
+| `GET /artifact/{uuid}/latest/download`, `/artifact/{uuid}/1/download` | Download the SBOM |
+
+How pypi-tea fills in what TEA leaves to the server:
+
+- **Paging.** Lists take `pageSize` (1 to 100, default 25) and return `hasNext` and `nextPageToken`. A token works only with the path, filters and sort that produced it; otherwise the answer is `400 INVALID_PAGE_TOKEN`.
+- **Sorting.** `sortField` and `sortOrder` follow the spec, ties broken by `uuid`. A version sorts as a string, by code point. Across the whole catalog, `/productReleases` and `/componentReleases` sort only by `createdDate`, with ties in the order they were stored; any other `sortField` there is `400 INVALID_REQUEST`.
+- **Dates.** `createdDate` is when pypi-tea first stored the release, `releaseDate` when it was uploaded to PyPI.
+- **Search.** `idType=PURL` resolves the release the PURL names, honouring the `os`, `arch` and `file_name` qualifiers. Other identifier types match nothing.
+- **Artifacts.** Wheels never change, so every SBOM has one revision, version `1`. pypi-tea hosts the SBOM itself, so its format has no `url`: clients download it from `/artifact/{uuid}/1/download`, which sends a strong `ETag` and answers `If-None-Match` with `304`. No SBOM has a signature, so the signature downloads answer `404 SIGNATURE_NOT_FOUND`.
+- **Lifecycle (CLE).** PyPI publishes none, so the `/cle` endpoints answer `404 NOT_IMPLEMENTED`.
 
 ### Non-TEA endpoints
 
@@ -212,6 +225,7 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 | `GET /package/{name}/{version}` | SBOM page for a release |
 | `GET /packages` | Browse releases with SBOMs (`page`, `format` query params) |
 | `GET /sitemap.xml` | Sitemap index with per-shard `lastmod`; shards at `/sitemap-{n}.xml`, gzipped when the client accepts it |
+| `GET /artifact/{uuid}/download` | The SBOM file, as package pages link it |
 | `GET /attestation/{package}/{version}` | PEP 740 attestation results per wheel |
 | `GET /stats` | Raw statistics JSON |
 | `GET /stats/timeseries` | Daily statistics (30 days) |
@@ -219,16 +233,24 @@ While a release is still queued, its package page answers `503` with `Retry-Afte
 
 ## Example
 
-Discover SBOMs for a package:
+Discover SBOMs for a package, by PURL or by TEI (a `tei://` TEI carries the PURL Base64URL-encoded):
 
 ```bash
-curl "http://localhost:8000/discovery?tei=urn:tei:purl:localhost:pkg:pypi/cyclonedx-python-lib@8.4.0"
+curl "http://localhost:8000/v1.0.0/discovery?purl=pkg:pypi/cyclonedx-python-lib@8.4.0"
+curl "http://localhost:8000/v1.0.0/discovery?tei=tei://localhost/purl/cGtnOnB5cGkvY3ljbG9uZWR4LXB5dGhvbi1saWJAOC40LjA"
 ```
 
 Search by PURL:
 
 ```bash
-curl "http://localhost:8000/products?idType=PURL&idValue=pkg:pypi/cyclonedx-python-lib@8.4.0"
+curl "http://localhost:8000/v1.0.0/products?idType=PURL&idValue=pkg:pypi/cyclonedx-python-lib@8.4.0"
+```
+
+Or with the [libtea](https://pypi.org/project/libtea/) CLI:
+
+```bash
+pip install 'libtea[cli]'
+tea-cli search-releases --id-type PURL --id-value 'pkg:pypi/cyclonedx-python-lib@8.4.0' --base-url http://localhost:8000/v1.0.0
 ```
 
 ## Data model
@@ -237,7 +259,8 @@ curl "http://localhost:8000/products?idType=PURL&idValue=pkg:pypi/cyclonedx-pyth
 |---|---|---|
 | Package (e.g. `requests`) | Product | `uuid5(NS, "pkg:pypi/requests")` |
 | Version (e.g. `2.31.0`) | ProductRelease | `uuid5(NS, "pkg:pypi/requests@2.31.0")` |
-| Wheel file | Component + ComponentRelease | `uuid5(NS, "wheel:<filename>")` / `uuid5(NS, <wheel_url>)` |
+| Wheel file | Component + ComponentRelease, identified by `pkg:pypi/<name>@<version>?file_name=<filename>` | `uuid5(NS, "wheel:<filename>")` / `uuid5(NS, <wheel_url>)` |
+| The wheel's download | Distribution of the ComponentRelease | `uuid5(NS, "distribution:<wheel_url>")` |
 | SBOM file in wheel | Artifact | `uuid5(NS, "sbom:<wheel_url>:<sbom_path>")` |
 
 All UUIDs are deterministic (UUID v5 with a fixed namespace) so they're stable across requests and server restarts.

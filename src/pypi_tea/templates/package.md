@@ -62,8 +62,8 @@ OSV has no known vulnerabilities for the components these SBOMs list.
 This SBOM is served over the [Transparency Exchange API](https://github.com/CycloneDX/transparency-exchange-api) (TEA). With the `libtea` client:
 
 ```
-pip install libtea
-python -m libtea {{ server_root_url }} {{ purl }}
+pip install 'libtea[cli]'
+tea-cli search-releases --id-type PURL --id-value '{{ purl }}' --base-url {{ server_root_url }}/v{{ tea_version }}
 ```
 
 Machine-readable copy of this page: {{ canonical_url }}.json

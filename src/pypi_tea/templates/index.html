@@ -198,7 +198,8 @@
 $ pip install libtea[cli]
 
 <span class="c"># Inspect a PyPI package — discovers SBOMs via TEA in one shot</span>
-$ tea-cli inspect <span class="s">"urn:tei:purl:pypi.sbomify.com:pkg:pypi/cryptography@44.0.2"</span>
+<span class="c"># (the TEI carries the PURL pkg:pypi/cryptography@44.0.2, Base64URL-encoded)</span>
+$ tea-cli inspect <span class="s">"tei://pypi.sbomify.com/purl/cGtnOnB5cGkvY3J5cHRvZ3JhcGh5QDQ0LjAuMg"</span>
 
 <span class="c"># Search for a specific package version by PURL</span>
 $ tea-cli search-releases --id-type PURL \

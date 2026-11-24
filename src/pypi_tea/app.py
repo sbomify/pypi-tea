@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from libtea.models import ErrorType
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from pypi_tea import analytics, db, sentry
-from pypi_tea.config import settings
+from pypi_tea.config import TEA_VERSION, settings
 from pypi_tea.lookup import Overloaded, Pending, read
 from pypi_tea.routes import pages, seo, stats, tea
 from pypi_tea.usage import FLUSH_SECONDS, usage
@@ -83,16 +85,28 @@ async def _pending(_request: Request, _exc: Pending) -> JSONResponse:
     )
 
 
-# TEA clients construct versioned base URLs (e.g. /v0.3.0-beta.2/discovery)
+@app.exception_handler(tea.BadPageToken)
+async def _bad_page_token(_request: Request, exc: tea.BadPageToken) -> JSONResponse:
+    return tea.invalid(str(exc), ErrorType.INVALID_PAGE_TOKEN)
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A malformed request gets TEA 1.0.0's error body and 400, not FastAPI's 422."""
+    message = "; ".join(f"{'.'.join(map(str, e['loc'][1:]))}: {e['msg']}" for e in exc.errors())
+    return tea.invalid(message)
+
+
+# TEA clients construct versioned base URLs (e.g. /v1.0.0/discovery)
 # after probing /.well-known/tea, so the API is mounted under the version prefix too.
-_version_prefix = f"/v{settings.tea_spec_version}"
+_version_prefix = f"/v{TEA_VERSION}"
 
 
 @app.head(_version_prefix)
 @app.get(_version_prefix)
 async def version_root() -> dict[str, str]:
     """Version prefix root — used by TEA clients to probe endpoint reachability."""
-    return {"version": settings.tea_spec_version}
+    return {"version": TEA_VERSION}
 
 
 app.include_router(tea.router)
@@ -125,6 +139,9 @@ _CACHE_RULES: tuple[tuple[str, str], ...] = (
     # Fonts and images never change in place; the stylesheet URL carries ?v=<version>.
     ("/static/", "public, max-age=86400, s-maxage=604800, stale-if-error=604800"),
     ("/artifact/", "public, max-age=86400, s-maxage=604800, stale-if-error=604800"),
+    # The catalog listings grow; one component and its release never change.
+    ("/components", "public, max-age=3600, s-maxage=3600, stale-if-error=86400"),
+    ("/componentReleases", "public, max-age=3600, s-maxage=3600, stale-if-error=86400"),
     ("/component", "public, max-age=86400, s-maxage=604800, stale-if-error=604800"),
     ("/productRelease/", "public, max-age=3600, s-maxage=86400, stale-if-error=604800"),
     ("/product", "public, max-age=3600, s-maxage=3600, stale-if-error=86400"),
@@ -140,7 +157,9 @@ _TEA_ENDPOINTS = frozenset(
         "product",
         "productReleases",
         "productRelease",
+        "components",
         "component",
+        "componentReleases",
         "componentRelease",
         "artifact",
     }
@@ -188,10 +207,9 @@ class EdgeMiddleware:
             if message["type"] == "http.response.start":
                 started = True
                 status = message["status"]
-                headers = [
-                    (k, v) for k, v in message.get("headers", []) if k.lower() != b"cache-control" or rule is None
-                ]
-                if rule is not None:
+                headers = list(message.get("headers", []))
+                # A handler's own Cache-Control wins, such as the revalidation TEA asks for on a latest download.
+                if rule is not None and all(k.lower() != b"cache-control" for k, _ in headers):
                     value = rule if status < 400 else ("no-store" if status >= 500 else "public, max-age=300")
                     headers.append((b"cache-control", value.encode()))
                 message["headers"] = headers

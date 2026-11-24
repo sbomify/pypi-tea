@@ -13,7 +13,7 @@ import pytest
 import uvicorn
 
 from pypi_tea import db
-from pypi_tea.config import settings
+from pypi_tea.config import TEA_VERSION, settings
 from pypi_tea.lookup import _inflight, _memo
 
 # Never send test traffic to PostHog; tests that exercise analytics install a fake client.
@@ -161,9 +161,9 @@ def tea_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def tea_client(tea_server: str) -> Iterator[Any]:
-    """Session-scoped TeaClient pointing at the in-process server."""
+    """Module-scoped TeaClient for the in-process server's TEA mount, the base URL .well-known/tea advertises."""
     from libtea.client import TeaClient
 
-    client = TeaClient(base_url=tea_server, timeout=60.0)
+    client = TeaClient(base_url=f"{tea_server}/v{TEA_VERSION}", timeout=60.0)
     yield client
     client.close()

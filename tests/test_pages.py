@@ -15,7 +15,7 @@ import xmlschema
 from conftest import FakePyPI, make_wheel, sbom_wheel
 from pypi_tea import db, jobs, lookup, store
 from pypi_tea.app import app
-from pypi_tea.config import settings
+from pypi_tea.config import TEA_VERSION, settings
 from pypi_tea.ingest import ingest_release
 from pypi_tea.routes import pages
 
@@ -189,7 +189,7 @@ async def test_robots_keeps_crawlers_off_the_api(client: httpx.AsyncClient) -> N
 
     robots = RobotFileParser()
     robots.parse(text.splitlines())
-    v = f"/v{settings.tea_spec_version}"
+    v = f"/v{TEA_VERSION}"
     for path in (v, f"{v}/discovery", f"{v}/stats", "/componentRelease/x", "/productReleases", "/stats/usage"):
         assert not robots.can_fetch("*", path), path
     # Only the versioned API mount is off-limits, not every path starting with "v".
@@ -272,13 +272,14 @@ async def test_non_canonical_package_url_redirects(client: httpx.AsyncClient) ->
     assert resp.headers["location"] == "/package/ruamel-yaml/0.18.6"
 
 
-async def test_products_list_comes_from_listing(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
-    await _seed(fake_pypi, ("a", "1", True), ("b", "1", False), ("b", "2", False))
-    products = (await client.get("/products", params={"pageOffset": 1, "pageSize": 1})).json()
-    assert products["totalResults"] == 2
-    assert [p["name"] for p in products["results"]] == ["b"]
-    releases = (await client.get("/productReleases", params={"pageOffset": 0, "pageSize": 10})).json()
-    assert releases["totalResults"] == 3
+async def test_catalog_lists_page_by_token(client: httpx.AsyncClient, fake_pypi: FakePyPI) -> None:
+    await _seed(fake_pypi, ("b", "1", False), ("a", "1", True), ("b", "2", False))
+    first = (await client.get("/products", params={"pageSize": 1})).json()
+    products = (await client.get("/products", params={"pageSize": 1, "pageToken": first["nextPageToken"]})).json()
+    assert [p["name"] for p in first["results"] + products["results"]] == ["a", "b"]
+    assert products["hasNext"] is False
+    releases = (await client.get("/productReleases", params={"pageSize": 10})).json()
+    assert [(r["productName"], r["version"]) for r in releases["results"]] == [("b", "1"), ("a", "1"), ("b", "2")]
 
 
 async def test_out_of_range_sitemap_shard_is_not_memoized(client: httpx.AsyncClient) -> None:

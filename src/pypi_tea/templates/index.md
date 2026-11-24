@@ -25,8 +25,8 @@ pypi-tea tracks which Python packages ship a CycloneDX or SPDX SBOM inside their
 ## Query with TEA
 
 ```
-pip install libtea
-python -m libtea {{ server_root_url }} pkg:pypi/<name>@<version>
+pip install 'libtea[cli]'
+tea-cli search-releases --id-type PURL --id-value 'pkg:pypi/<name>@<version>' --base-url {{ server_root_url }}/v{{ tea_version }}
 ```
 
 A release that hasn't been looked up before is fetched from PyPI on the first TEA query.

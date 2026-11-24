@@ -85,13 +85,14 @@ def test_catalog_listings_are_appended_without_a_rebuild(database: str) -> None:
     _save_some(conn)
     assert _listing(conn, store.ALL_PRODUCTS) == [("b", ""), ("a", "")]
     assert _listing(conn, store.ALL_RELEASES) == [("b", "1"), ("a", "1"), ("b", "2")]
-    assert store.count_products(conn) == 2
-    assert store.list_release_keys(conn, 1, 10) == [("a", "1"), ("b", "2")]
+    assert store.product_names_page(conn, None, 10, False) == ["a", "b"]
+    assert store.release_keys_page(conn, (1,), 10, False) == [(2, "a", "1"), (3, "b", "2")]
+    assert store.release_keys_page(conn, (3,), 10, True) == [(2, "a", "1"), (1, "b", "1")]
     # The SBOM listing still needs the worker's rebuild, and leaves the catalog listings alone.
     assert store.count_packages_with_sbom(conn, None) == 0
     assert store.rebuild_listing(conn) == 2
     assert _listing(conn, "") == [("b", "1"), ("b", "2")]
-    assert store.count_listed_releases(conn) == 3
+    assert len(store.release_keys_page(conn, None, 10, False)) == 3
 
 
 def test_release_without_sbom_does_not_bump_catalog(database: str) -> None:
@@ -226,3 +227,18 @@ def test_migration_lays_out_the_sitemap(database: str, monkeypatch: pytest.Monke
     # Shard 1 is full, so new releases still start a new shard.
     store.save_release(conn, _release("f", "1", [("CycloneDX/1.6", True)]))
     assert [s for s, _ in store.sitemap_shards(conn)] == [0, 1, 2]
+
+
+def test_migration_indexes_wheels_by_filename(database: str) -> None:
+    conn = db.connect(database)
+    store.save_release(conn, _release("a", "1", []))
+    # What a version 4 store looks like: no index for the TEA /components listing.
+    conn.execute("DROP INDEX wheels_filename")
+    conn.execute("PRAGMA user_version=4")
+
+    db.init_schema(database)
+
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'wheels_filename'").fetchone() is not None
+    bare = ("a-1-bare.whl", "https://files.example.com/a-1-bare.whl", "a", "1")
+    assert store.wheels_page(conn, None, 10, False) == [bare]
+    assert store.wheels_page(conn, bare[:2], 10, False) == []
